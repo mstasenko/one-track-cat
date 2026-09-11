@@ -1,0 +1,74 @@
+name: Release
+run-name: "Release: publish — ${{ github.ref_name }}"
+
+on:
+  push:
+    tags: ['v[0-9]+.[0-9]+.[0-9]+']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22.22.1
+          package-manager-cache: false
+
+      - name: Install GNOME Wayland runtime and dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes gnome-shell libgbm1 libgtk-3-0 libnss3 libasound2t64
+          npm install --global npm@11.18.0
+
+      - name: Set up build-only Python for the optional face model
+        uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
+        with:
+          python-version: 3.11.15
+
+      - name: Verify release
+        run: npm run verify:ci
+
+      - name: Build release files
+        run: |
+          npm run package
+          npm run build:face-pack
+          otc_CPU_ONLY=1 npm run verify:face-pack
+          otc_CPU_ONLY=1 otc_FACE_PACK_TEST=1 \
+            otc_FACE_FIXTURE_PATH="$PWD/dist/face-pack-cache/fixtures/large.ppm" \
+            npx vitest run src/main/face-export-real.test.ts
+          cd release
+          sha256sum ./*.AppImage ./*.zip > SHA256SUMS
+
+      - name: Smoke-test packaged AppImage on Wayland
+        run: |
+          appimage="release/OneTrackCat-$(node -p 'require("./package.json").version')-ubuntu26-wayland-x86_64.AppImage"
+          test -f "$appimage"
+          set +e
+          node scripts/run-headless-wayland.mjs \
+            timeout 10s env APPIMAGE_EXTRACT_AND_RUN=1 "$appimage" \
+            >"$RUNNER_TEMP/appimage-smoke.log" 2>&1
+          status=$?
+          set -e
+          if ! test "$status" -eq 0 -o "$status" -eq 124; then
+            cat "$RUNNER_TEMP/appimage-smoke.log"
+            exit 1
+          fi
+
+      - name: Publish GitHub Release
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" release/*.AppImage release/*.zip release/SHA256SUMS --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" release/*.AppImage release/*.zip release/SHA256SUMS --generate-notes --verify-tag
+          fi

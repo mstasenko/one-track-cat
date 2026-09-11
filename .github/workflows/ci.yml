@@ -1,0 +1,80 @@
+name: CI
+run-name: "CI: checks and AppImage — ${{ github.ref_name }}"
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-and-package:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22.22.1
+          package-manager-cache: false
+
+      - name: Install GNOME Wayland test runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes gnome-shell libgbm1 libgtk-3-0 libnss3 libasound2t64
+
+      - name: Install dependencies
+        run: npm install --global npm@11.18.0
+
+      - name: Check quality and test all functionality
+        run: npm run verify:ci
+
+      - name: Build AppImage
+        run: npm run package
+
+      - name: Smoke-test packaged AppImage on Wayland
+        run: |
+          appimage="release/OneTrackCat-$(node -p 'require("./package.json").version')-ubuntu26-wayland-x86_64.AppImage"
+          test -f "$appimage"
+          set +e
+          node scripts/run-headless-wayland.mjs \
+            timeout 10s env APPIMAGE_EXTRACT_AND_RUN=1 "$appimage" \
+            >"$RUNNER_TEMP/appimage-smoke.log" 2>&1
+          status=$?
+          set -e
+          if ! test "$status" -eq 0 -o "$status" -eq 124; then
+            cat "$RUNNER_TEMP/appimage-smoke.log"
+            exit 1
+          fi
+
+      - name: Upload reports and AppImage
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: OneTrackCat-ubuntu26-wayland-${{ github.sha }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            release/*.AppImage
+            coverage/
+            playwright-report/
+            test-results/
+
+      - name: Upload separate meme pack
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: otc-media-pack-${{ github.sha }}
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            release/otc-media-pack.zip

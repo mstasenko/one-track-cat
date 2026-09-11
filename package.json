@@ -1,0 +1,124 @@
+{
+  "name": "one-track-cat",
+  "version": "0.1.0",
+  "description": "A simple, local gameplay video editor for Linux",
+  "author": "OneTrackCat contributors",
+  "desktopName": "OneTrackCat.desktop",
+  "license": "GPL-3.0-only",
+  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mstasenko/one-track-cat.git"
+  },
+  "bugs": {
+    "url": "https://github.com/mstasenko/one-track-cat/issues"
+  },
+  "homepage": "https://github.com/mstasenko/one-track-cat#readme",
+  "packageManager": "npm@11.18.0",
+  "engines": {
+    "node": ">=22.22.0",
+    "npm": ">=11.18.0 <12"
+  },
+  "allowScripts": {
+    "electron-winstaller": false,
+    "esbuild@0.25.12": true,
+    "esbuild@0.28.1": true,
+    "esbuild@0.28.2": true,
+    "ffmpeg-static@5.3.0": true
+  },
+  "type": "module",
+  "main": "out/main/index.js",
+  "scripts": {
+    "predev": "node scripts/ensure-meme-pack.mjs --quiet && node scripts/install-dev-desktop.mjs",
+    "dev": "electron-vite dev --noSandbox --logLevel error",
+    "build": "electron-vite build",
+    "package": "npm run build:meme-pack && npm run build:ffmpeg && npm run build && electron-builder --linux AppImage --publish never && node scripts/place-meme-pack.mjs",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "npm run lint && npm run typecheck && npm run test:vitest && node scripts/build-meme-pack.mjs --quiet && node scripts/verify-meme-pack.mjs && npm run test:e2e",
+    "verify:ci": "npm install && npm audit --audit-level=high && npm test",
+    "test:vitest": "vitest run --coverage && node scripts/quality.mjs",
+    "test:e2e": "electron-vite build --logLevel error && node scripts/run-headless-wayland.mjs node_modules/.bin/playwright test",
+    "test:e2e:ci-stress": "otc_E2E_SLOW_POINTER=1 npm run test:e2e -- --grep 'fills a vertical Short|keeps playback running across an appended source EOF'",
+    "test:quality": "node scripts/quality.mjs",
+    "build:icon": "node scripts/run-headless-wayland.mjs node scripts/render-brand-icon.mjs",
+    "build:meme-pack": "node scripts/build-meme-pack.mjs",
+    "build:ffmpeg": "node scripts/build-ffmpeg.mjs",
+    "build:face-pack": "node scripts/build-face-pack.mjs",
+    "verify:face-pack": "node scripts/verify-face-pack.mjs"
+  },
+  "dependencies": {
+    "@fontsource/anton": "5.2.7",
+    "@fontsource/bangers": "5.2.7",
+    "@fontsource/bebas-neue": "5.2.7",
+    "@fontsource/comic-neue": "5.2.7",
+    "@fontsource/lobster": "5.2.7",
+    "@fontsource/oswald": "5.2.8",
+    "@fontsource/permanent-marker": "5.2.7",
+    "@fontsource/roboto": "5.2.8",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "zustand": "5.0.14"
+  },
+  "devDependencies": {
+    "@eslint/js": "9.32.0",
+    "@playwright/test": "1.61.1",
+    "@types/node": "24.1.0",
+    "@types/react": "19.1.9",
+    "@types/react-dom": "19.1.7",
+    "@vitejs/plugin-react": "5.0.4",
+    "@vitest/coverage-v8": "4.1.11",
+    "adm-zip": "0.6.0",
+    "electron": "43.2.0",
+    "electron-builder": "26.15.3",
+    "electron-vite": "5.0.0",
+    "eslint": "9.32.0",
+    "eslint-plugin-react-hooks": "6.0.0",
+    "eslint-plugin-react-refresh": "0.4.20",
+    "ffmpeg-static": "5.3.0",
+    "ffprobe-static": "3.1.0",
+    "globals": "16.3.0",
+    "jsdom": "26.1.0",
+    "typescript": "5.9.2",
+    "typescript-eslint": "8.39.0",
+    "vite": "7.3.6",
+    "vitest": "4.1.11"
+  },
+  "build": {
+    "appId": "io.github.mstasenko.otc",
+    "productName": "OneTrackCat",
+    "asar": true,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "out/**/*",
+      "package.json",
+      "THIRD_PARTY_NOTICES.md"
+    ],
+    "extraResources": [
+      {
+        "from": "src/icon.png",
+        "to": "resources/icon.png"
+      },
+      {
+        "from": "dist/ffmpeg-vaapi",
+        "to": "bin"
+      },
+      {
+        "from": "node_modules/ffprobe-static/bin/linux/x64/ffprobe",
+        "to": "bin/ffprobe"
+      }
+    ],
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "category": "AudioVideo",
+      "icon": "src/icon.png",
+      "syncDesktopName": true,
+      "artifactName": "OneTrackCat-${version}-ubuntu26-wayland-${arch}.${ext}",
+      "executableName": "OneTrackCat"
+    }
+  }
+}

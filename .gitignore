@@ -1,0 +1,10 @@
+node_modules/
+package-lock.json
+out/
+dist/
+release/
+coverage/
+playwright-report/
+test-results/
+.vite/
+*.log
