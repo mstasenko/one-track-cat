@@ -138,7 +138,7 @@ test('opens the selected file from the chooser', async () => {
   }
 })
 
-test('opens a Short through the native chooser fallback with a cover canvas', async () => {
+test('opens a Short through the native chooser fallback with full-source preview and portrait framing guide', async () => {
   test.setTimeout(60_000)
   const fixture = createFixture()
   const app = await launch(fixture.first, fixture.first)
@@ -147,7 +147,13 @@ test('opens a Short through the native chooser fallback with a cover canvas', as
     const page = await app.firstWindow()
     await click(page.getByRole('button', { name: 'Open Short', exact: true }))
     await completeVideoPicker(page)
-    await expect(page.locator('.preview-stage')).toHaveCSS('aspect-ratio', '1080 / 1920')
+    await expect(page.locator('.preview-stage')).toHaveCSS('aspect-ratio', '64 / 36')
+    await expect(page.locator('.preview-source-video:not(.preview-transition-previous)')).toHaveCSS('object-fit', 'contain')
+    const guide = page.locator('.short-frame-guide').first()
+    await expect(guide).toBeVisible()
+    const guideBox = await guide.boundingBox()
+    if (!guideBox) throw new Error('Portrait Short framing guide is not visible')
+    expect(guideBox.width / guideBox.height).toBeCloseTo(9 / 16, 2)
     await expect(page.locator('.source-segment').first()).toHaveAttribute('title', 'first.mp4')
   } finally {
     await close(app)

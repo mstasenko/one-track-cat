@@ -2,7 +2,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { TransitionPreview } from '../model/transitions'
-import { OutgoingTransitionVideo } from './TransitionPreview'
+import { IncomingTransitionVideo, OutgoingTransitionVideo } from './TransitionPreview'
 import type { PreviewAudioMixer } from './usePreviewAudioMixer'
 
 let root: Root | undefined
@@ -11,6 +11,9 @@ let container: HTMLDivElement | undefined
 function preview(previousSourceTime: number): TransitionPreview {
   return {
     active: { effect: 'fade', duration: 1, previousSegmentIndex: 0, progress: 0.5 },
+    currentSourceTime: 1,
+    currentPath: 'media://current.mp4',
+    currentPlaybackRate: 1,
     previousSourceTime,
     previousPath: 'media://previous.mp4',
     previousPlaybackRate: 1,
@@ -129,6 +132,123 @@ afterEach(() => {
 })
 
 describe('OutgoingTransitionVideo', () => {
+  it('keeps a preloaded incoming clip ready for the first transition frame', () => {
+    container = document.createElement('div')
+    document.body.append(container)
+    root = createRoot(container)
+    act(() => {
+      root?.render(<IncomingTransitionVideo
+        preview={null}
+        fit="contain"
+        preloadPath="media://current.mp4"
+        preloadTime={1}
+      />)
+    })
+    const video = container.querySelector('video')
+    if (!(video instanceof HTMLVideoElement)) throw new Error('incoming transition video missing')
+    const clock = mediaClock(video, 0)
+    const play = vi.fn().mockResolvedValue(undefined)
+    video.play = play
+    act(() => { video.dispatchEvent(new Event('loadedmetadata')) })
+    clock.setTime(1)
+    act(() => { video.dispatchEvent(new Event('seeked')) })
+    expect(video.style.visibility).toBe('visible')
+    expect(video.style.opacity).toBe('0')
+
+    const active = preview(4)
+    active.active.effect = 'wipeleft'
+    active.styles.current = { clipPath: 'inset(0 50% 0 0)' }
+    act(() => {
+      root?.render(<IncomingTransitionVideo preview={active} fit="contain" playing />)
+    })
+
+    expect(video.src).toContain('current.mp4')
+    expect(video.style.visibility).toBe('visible')
+    expect(video.style.clipPath).toBe('inset(0 50% 0 0)')
+    expect(play).toHaveBeenCalledOnce()
+  })
+
+  it('repositions an inactive preloader while the main timeline is playing', () => {
+    const harness = makeMixer()
+    const input = preloadProps(harness.mixer, {
+      playing: true,
+      preloadRate: 0
+    })
+    const video = mountPreload(input)
+    const clock = mediaClock(video, 8)
+    act(() => { video.dispatchEvent(new Event('loadedmetadata')) })
+
+    act(() => {
+      root?.render(<OutgoingTransitionVideo
+        preview={null}
+        fit="contain"
+        preloadPath={input.preloadPath}
+        preloadTime={2}
+        preloadRate={0}
+        playing
+        mixer={harness.mixer}
+      />)
+    })
+
+    expect(clock.time()).toBe(2)
+  })
+
+  it('shows a transition frame when decoding becomes ready after its seek', () => {
+    container = document.createElement('div')
+    document.body.append(container)
+    root = createRoot(container)
+    act(() => {
+      root?.render(<IncomingTransitionVideo
+        preview={preview(4)}
+        fit="contain"
+        playing
+      />)
+    })
+    const video = container.querySelector('video')
+    if (!(video instanceof HTMLVideoElement)) throw new Error('incoming transition video missing')
+    mediaClock(video, 1)
+    Object.defineProperty(video, 'readyState', { configurable: true, value: 1 })
+    act(() => { video.dispatchEvent(new Event('seeked')) })
+    expect(video.style.visibility).toBe('hidden')
+
+    video.currentTime = 1.5
+    Object.defineProperty(video, 'readyState', { configurable: true, value: 2 })
+    act(() => { video.dispatchEvent(new Event('canplay')) })
+    expect(video.style.visibility).toBe('visible')
+  })
+
+  it('starts from a predecoded outgoing overlap without another seek', () => {
+    container = document.createElement('div')
+    document.body.append(container)
+    root = createRoot(container)
+    act(() => {
+      root?.render(<OutgoingTransitionVideo
+        preview={null}
+        fit="contain"
+        playing
+        preloadPath="media://previous.mp4"
+        preloadTime={4}
+      />)
+    })
+    const video = container.querySelector('video')
+    if (!(video instanceof HTMLVideoElement)) throw new Error('outgoing transition video missing')
+    const clock = mediaClock(video, 0)
+    const play = vi.fn().mockResolvedValue(undefined)
+    video.play = play
+    act(() => { video.dispatchEvent(new Event('loadedmetadata')) })
+    clock.setTime(4)
+    act(() => { video.dispatchEvent(new Event('seeked')) })
+    clock.setter.mockClear()
+
+    act(() => {
+      root?.render(<OutgoingTransitionVideo preview={preview(4)} fit="contain" playing />)
+    })
+
+    expect(clock.setter).not.toHaveBeenCalled()
+    expect(video.style.visibility).toBe('visible')
+    expect(play).toHaveBeenCalledOnce()
+  })
+
   it('starts playback and does not seek on changing preview times while playing', () => {
     const initial = preview(4)
     const video = mount(initial, true)

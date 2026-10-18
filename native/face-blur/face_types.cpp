@@ -26,6 +26,11 @@ Box clipBox(const Box& box, int width, int height) {
 
 bool validBox(const Box& box) { return box.x2 > box.x1 + 1.0F && box.y2 > box.y1 + 1.0F; }
 
+float faceScoreThresholdForSensitivity(float sensitivity) {
+  return 0.05F + (1.0F - sensitivity) * 0.55F +
+         std::max(0.0F, 0.5F - sensitivity) * 0.78F;
+}
+
 std::vector<Detection> nonMaxSuppression(std::vector<Detection> detections,
                                           float iouThreshold,
                                           std::size_t maximum) {

@@ -20,6 +20,16 @@ describe('timeline transitions', () => {
     expect(transitionAtOutputTime([], 0)).toBeNull()
   })
 
+  it('uses the complete duration of a short transition', () => {
+    const short: SourceSegment[] = [
+      { id: 'first', sourceId: 'source', sourceStart: 0, sourceEnd: 2 },
+      { id: 'second', sourceId: 'source', sourceStart: 4, sourceEnd: 6, transition: { effect: 'fade', duration: 0.65 } }
+    ]
+    expect(transitionAtOutputTime(short, 2.325)?.progress).toBeCloseTo(0.5)
+    expect(transitionAtOutputTime(short, 2.649)).not.toBeNull()
+    expect(transitionAtOutputTime(short, 2.651)).toBeNull()
+  })
+
   it('continues the outgoing source past its cut during a transition', () => {
     const session = {
       canvas: { width: 320, height: 180, fps: 20, fit: 'contain' },
@@ -87,5 +97,10 @@ describe('timeline transitions', () => {
     const styles = transitionStyles({ effect, progress: 1.5 })
     expect(styles.current).toHaveProperty(currentProperty)
     expect(styles.previous).toBeTypeOf('object')
+  })
+
+  it('eases fades at both ends', () => {
+    expect(transitionStyles({ effect: 'fade', progress: 0.25 }).current.opacity).toBeCloseTo(0.15625)
+    expect(transitionStyles({ effect: 'fade', progress: 0.75 }).current.opacity).toBeCloseTo(0.84375)
   })
 })

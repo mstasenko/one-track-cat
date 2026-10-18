@@ -23,12 +23,14 @@ import { effectiveFadeDurations, isAudioEnabledOverlay } from '@shared/audio-env
 import { useMediaUrl } from './useMediaUrl'
 import { overlayAnimationStyle } from './overlay-animation'
 import { videoRangeStyleAtTime } from '../model/video-range-transition'
+import { isShortCanvas, shortFramePositionAtTime } from '@shared/short-frame'
 
 interface TimelineProps {
   session: EditSession
   zoom: number
   onZoom: (zoom: number) => void
   onSeek: (time: number) => void
+  onNudgeFrame?: (direction: 'left' | 'right') => void
   onSelectOverlay: (id: string) => void
   selectedFaceBlurId: string | null
   onSelectFaceBlur: (id: string) => void
@@ -211,6 +213,9 @@ function TimelineHoverFrame({ session, preview }: { session: EditSession; previe
     .sort((left, right) => left.zIndex - right.zIndex)
   const focusTransform = focusCameraTransformAtTime(session.focusZooms, preview.outputTime)
   const rangeStyle = videoRangeStyleAtTime(session.videoTransitions ?? [], preview.outputTime)
+  const shortPosition = isShortCanvas(session.canvas)
+    ? shortFramePositionAtTime(session.shortFramePoints ?? [], preview.outputTime, session.canvas.shortFramePosition)
+    : 0.5
 
   useVideoSeek(previewVideo, preview.sourceTime, preview.path)
 
@@ -221,14 +226,14 @@ function TimelineHoverFrame({ session, preview }: { session: EditSession; previe
       aria-label={`Frame at ${formatTime(preview.outputTime, session.canvas.fps)}`}
     >
       <div className="timeline-hover-camera" style={{ transform: focusTransform }}>
-        <OutgoingTransitionVideo preview={transitionPreview} fit={session.canvas.fit} />
+        <OutgoingTransitionVideo preview={transitionPreview} fit={session.canvas.fit} objectPosition={`${shortPosition * 100}% 50%`} />
         <video
           ref={previewVideo}
           src={preview.path}
           muted
           preload="auto"
           playsInline
-          style={{ objectFit: session.canvas.fit, ...rangeStyle, ...transitionPreview?.styles.current }}
+          style={{ objectFit: session.canvas.fit, objectPosition: `${shortPosition * 100}% 50%`, ...rangeStyle, ...transitionPreview?.styles.current }}
           data-transition={transitionPreview?.active.effect}
         />
       </div>
@@ -281,7 +286,7 @@ function TimelineVideoSegment({ session, segment, duration, zoom }: { session: E
 }
 
 export function Timeline({
-  session, zoom, onZoom, onSeek, onSelectOverlay, selectedFaceBlurId, onSelectFaceBlur, onOverlayChange,
+  session, zoom, onZoom, onSeek, onNudgeFrame, onSelectOverlay, selectedFaceBlurId, onSelectFaceBlur, onOverlayChange,
   onOverlayGestureStart, onOverlayGestureEnd, onOverlayGestureCancel
 }: TimelineProps): React.JSX.Element {
   const duration = timelineDuration(session.segments)
@@ -289,6 +294,7 @@ export function Timeline({
   const selection = deletionRange(session)
   const marks = session.marks
   const replays = replayRanges(session.segments)
+  const shortPosition = shortFramePositionAtTime(session.shortFramePoints ?? [], session.playhead, session.canvas.shortFramePosition)
   const [hoverPreview, setHoverPreview] = useState<HoverPreview | null>(null)
 
   const pointerToTime = (event: React.PointerEvent<HTMLDivElement>): number => {
@@ -321,6 +327,10 @@ export function Timeline({
 
   return (
     <section className="timeline-shell" aria-label="Timeline">
+      {isShortCanvas(session.canvas) && <div className="short-frame-controls">
+        <button aria-label="Move frame left" title="Set frame 5% left at the playhead" disabled={shortPosition <= 0} onClick={() => onNudgeFrame?.('left')}>← Left</button>
+        <button aria-label="Move frame right" title="Set frame 5% right at the playhead" disabled={shortPosition >= 1} onClick={() => onNudgeFrame?.('right')}>Right →</button>
+      </div>}
       <div
         className="timeline-scroll"
         onWheel={(event) => {
@@ -339,6 +349,15 @@ export function Timeline({
             {session.segments.map((segment) => <TimelineVideoSegment key={segment.id} session={session} segment={segment} duration={duration} zoom={zoom} />)}
             {session.focusZooms.map((effect) => <div key={effect.id} className="focus-zoom-range" style={{ left: `${percentage(effect.start, duration)}%`, width: `${percentage(effect.duration, duration)}%` }}><span>{effect.zoom}×</span></div>)}
             {(session.videoTransitions ?? []).map((effect) => <div key={effect.id} className="video-transition-range" style={{ left: `${percentage(effect.start, duration)}%`, width: `${percentage(effect.duration, duration)}%` }}><span>Transition</span></div>)}
+            {isShortCanvas(session.canvas) && (session.shortFramePoints ?? []).map((point) => <button
+              key={point.id}
+              className="short-frame-point"
+              style={{ left: `${percentage(point.time, duration)}%` }}
+              title={`Frame ${Math.round(point.position * 100)}% at ${formatTime(point.time, session.canvas.fps)}`}
+              aria-label={`Frame position at ${formatTime(point.time, session.canvas.fps)}`}
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={() => onSeek(point.time)}
+            >◆</button>)}
             {(session.faceBlurs ?? []).map((effect) => (
               <button
                 type="button"

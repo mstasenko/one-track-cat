@@ -66,7 +66,21 @@ describe('face preview restoration bridge', () => {
   })
 })
 
+describe('face cache bridge', () => {
+  it('forwards cache cleanup requests to the main process', async () => {
+    await exposedApi.clearFaceCache()
+    expect(invoke).toHaveBeenCalledWith('face-cache:clear')
+  })
+})
+
 describe('video picker bridge', () => {
+  it('forwards typed paths to the file-or-folder channel', async () => {
+    invoke.mockResolvedValueOnce('/videos/clip.mp4')
+
+    await expect(exposedApi.openVideoPath('/videos/clip.mp4')).resolves.toBe('/videos/clip.mp4')
+    expect(invoke).toHaveBeenCalledWith('video:open-path', '/videos/clip.mp4')
+  })
+
   it('forwards directory listing requests to the video channel', async () => {
     const directory: VideoDirectory = { path: '/videos', parent: null, entries: [], truncated: false }
     invoke.mockResolvedValueOnce(directory)
@@ -80,6 +94,19 @@ describe('video picker bridge', () => {
 
     await expect(exposedApi.authorizeVideo('/videos/clip.mp4')).resolves.toBe('/videos/clip.mp4')
     expect(invoke).toHaveBeenCalledWith('media:authorize-drop', '/videos/clip.mp4')
+  })
+})
+
+describe('export path bridge', () => {
+  it('preserves the native chooser call and forwards an optional direct path', async () => {
+    invoke.mockResolvedValueOnce('/native/output.mp4')
+    await expect(exposedApi.chooseExportPath('source-edited.mp4')).resolves.toBe('/native/output.mp4')
+    expect(invoke).toHaveBeenCalledWith('dialog:export-path', 'source-edited.mp4')
+
+    invoke.mockClear()
+    invoke.mockResolvedValueOnce('/typed/output.mp4')
+    await expect(exposedApi.chooseExportPath('source-edited.mp4', '/typed/output.mp4')).resolves.toBe('/typed/output.mp4')
+    expect(invoke).toHaveBeenCalledWith('dialog:export-path', 'source-edited.mp4', '/typed/output.mp4')
   })
 })
 

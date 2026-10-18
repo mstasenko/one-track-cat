@@ -1,6 +1,7 @@
 import type { EditSession } from '@shared/types'
 import { marksAfterRemoval, isFreezeSegment, removeOutputRange, segmentOutputDuration, segmentPlaybackRate, sourceForSegment, timeAfterOutputRemoval, timelineDuration, withTransition } from './timeline'
 import { timedRangesAfterRemoval } from './timed-ranges'
+import { shortFramePointsAfterRemoval } from './short-frame'
 
 /** Repair older transitions which asked for moving footage beyond source EOF. */
 export function restoreTransitionHandles(session: EditSession): EditSession {
@@ -30,6 +31,7 @@ export function restoreTransitionHandles(session: EditSession): EditSession {
       marks: marksAfterRemoval(result.marks, start, boundary, timelineDuration(segments)),
       playhead: timeAfterOutputRemoval(result.playhead, start, boundary),
       focusZooms: timedRangesAfterRemoval(result.focusZooms, start, boundary),
+      ...(result.shortFramePoints ? { shortFramePoints: shortFramePointsAfterRemoval(result.shortFramePoints, start, boundary) } : {}),
       ...(result.faceBlurs ? { faceBlurs: timedRangesAfterRemoval(result.faceBlurs, start, boundary) } : {}),
       ...(result.videoTransitions ? { videoTransitions: timedRangesAfterRemoval(result.videoTransitions, start, boundary) } : {})
     }

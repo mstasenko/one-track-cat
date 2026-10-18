@@ -3,8 +3,25 @@ import type { EditorState } from './editor-state'
 import { clamp, timelineDuration } from './timeline'
 import { restoreTransitionHandles } from './transition-handles'
 import { fitVideoRangeTransition } from '@shared/video-range-transition'
+import { legacyShortFrameMovesToPoints, normalizeShortFramePoints } from '@shared/short-frame'
 
 let sessionWriteQueue: Promise<void> = Promise.resolve()
+
+interface RetainedEditorData {
+  editorState?: Partial<EditorState>
+}
+
+// Retain unsaved data across development reloads; actions use the new code.
+export function retainEditorState(
+  store: { getState(): EditorState; setState(state: Partial<EditorState>): unknown },
+  hot: { data: RetainedEditorData; dispose(callback: (data: RetainedEditorData) => void): void }
+): void {
+  if (hot.data.editorState) store.setState(hot.data.editorState)
+  hot.dispose((data) => {
+    const { initialized, session, history, future, gesture, assets, gpu, job, busy, error } = store.getState()
+    data.editorState = { initialized, session, history, future, gesture, assets, gpu, job, busy, error }
+  })
+}
 
 export function queueSessionWrite(callback: () => Promise<void>): Promise<void> {
   const write = sessionWriteQueue.catch(() => undefined).then(callback)
@@ -80,6 +97,7 @@ function savedSnapshot(session: EditSession): SavedSessionSnapshot {
     playhead: session.playhead,
     marks: session.marks,
     focusZooms: session.focusZooms,
+    ...(session.shortFramePoints === undefined ? {} : { shortFramePoints: session.shortFramePoints }),
     ...(session.videoTransitions === undefined ? {} : { videoTransitions: session.videoTransitions.map(fitVideoRangeTransition) }),
     ...(session.faceBlurs === undefined ? {} : { faceBlurs: session.faceBlurs })
   }
@@ -107,11 +125,26 @@ async function restoredSession(
     waveform: []
   })))
   const duration = timelineDuration(saved.segments)
+  const legacyInitial = saved.canvas.shortFramePosition
+  const shortFramePoints = saved.shortFramePoints ?? normalizeShortFramePoints(
+    legacyShortFrameMovesToPoints(
+      saved.shortFrameMoves ?? [],
+      legacyInitial ?? 0.5,
+      legacyInitial !== undefined
+    ).map((point) => ({ ...point, time: Math.min(point.time, duration) }))
+  )
+  const canvas = { ...saved.canvas }
+  delete canvas.shortFramePosition
+  const savedWithoutLegacy = { ...saved }
+  delete savedWithoutLegacy.shortFrameMoves
+  delete savedWithoutLegacy.shortFramePoints
   return restoreTransitionHandles({
-    ...saved,
+    ...savedWithoutLegacy,
+    canvas,
     sources,
     overlays: saved.overlays.map((overlay) => normalizeOverlay(overlay, duration)),
     focusZooms: saved.focusZooms ?? [],
+    shortFramePoints,
     videoTransitions: saved.videoTransitions ?? [],
     ...(saved.faceBlurs === undefined ? {} : { faceBlurs: saved.faceBlurs })
   })

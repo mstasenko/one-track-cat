@@ -39,7 +39,7 @@ function overlapsRange(start: number, duration: number, range: PreviewRange): bo
 export function previewSeekRequest(request: ExportRequest, range?: PreviewRange): ExportRequest {
   const first = request.segments[0]
   if (!range || !first || !normalSegment(first) || (first.playbackRate ?? 1) !== 1
-    || range[1] > segmentOutputDuration(first)) return request
+    || range[1] > segmentOutputDuration(first) || (request.shortFramePoints?.length ?? 0) > 0) return request
   const overlays = request.overlays.filter((item) => overlapsRange(item.start, item.duration, range))
   const focusZooms = (request.focusZooms ?? []).filter((item) => overlapsRange(item.start, item.duration, range))
   const videoTransitions = (request.videoTransitions ?? []).filter((item) => overlapsRange(item.start, item.duration, range))
@@ -53,7 +53,8 @@ export function previewSeekRequest(request: ExportRequest, range?: PreviewRange)
  */
 export function previewSeekPlan(request: ExportRequest, range?: PreviewRange): PreviewSeekPlan | undefined {
   if (!range || range[0] <= 2 || request.segments.length !== 1) return undefined
-  if (request.overlays.length > 0 || (request.focusZooms?.length ?? 0) > 0 || (request.videoTransitions?.length ?? 0) > 0) return undefined
+  if (request.overlays.length > 0 || (request.focusZooms?.length ?? 0) > 0 ||
+    (request.shortFramePoints?.length ?? 0) > 0 || (request.videoTransitions?.length ?? 0) > 0) return undefined
   const segment = request.segments[0]
   if (!segment || !normalSegment(segment) || (segment.playbackRate ?? 1) !== 1) return undefined
   const source = sourceFor(request, segment)
@@ -91,7 +92,7 @@ export async function preparePreviewSeek(request: ExportRequest, range?: Preview
 }> {
   const first = previewSeekRequest(request, range)
   const original = { request: first, seek: previewSeekPlan(first, range) }
-  if (!range || original.seek || request.overlays.length || request.focusZooms?.length
+  if (!range || original.seek || request.overlays.length || request.focusZooms?.length || request.shortFramePoints?.length
     || request.segments.some((segment) => normalSegment(segment) && segment.transition)
     || request.videoTransitions?.some((effect) => overlapsRange(effect.start, effect.duration, range))) return original
   const selected = laterPreviewSegment(request, range)

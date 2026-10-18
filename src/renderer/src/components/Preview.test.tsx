@@ -1,107 +1,101 @@
 import { act } from 'react'
-import { createRoot, type Root } from 'react-dom/client'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { EditSession, MediaMetadata, SourceSegment } from '@shared/types'
+import { describe, expect, it, vi } from 'vitest'
+import type { SourceSegment } from '@shared/types'
 import { createSession } from '../model/timeline'
-import type { PreviewProps } from './Preview'
 import { Preview } from './Preview'
-
-let root: Root | undefined
-let container: HTMLDivElement | undefined
-let requestVideoFrameCallback: PropertyDescriptor | undefined
-let cancelVideoFrameCallback: PropertyDescriptor | undefined
-
-const metadata: MediaMetadata = {
-  path: '/source.mp4', name: 'source.mp4', size: 1, modifiedAt: 1, duration: 10,
-  width: 320, height: 180, fps: 30, videoCodec: 'h264', hasAudio: true
-}
-
-function props(overrides: Partial<PreviewProps> = {}): PreviewProps {
-  const session = createSession(metadata)
-  return {
-    session,
-    playing: false,
-    zoom: 1,
-    canUndo: false,
-    canRedo: false,
-    onPlayingChange: vi.fn(),
-    onZoom: vi.fn(),
-    onPlayhead: vi.fn(),
-    onSelect: vi.fn(),
-    onOverlayChange: vi.fn(),
-    onOverlayGestureStart: vi.fn(),
-    onOverlayGestureEnd: vi.fn(),
-    onOverlayGestureCancel: vi.fn(),
-    onAddMark: vi.fn(),
-    onClearMarks: vi.fn(),
-    onRemoveMarked: vi.fn(),
-    onUndo: vi.fn(),
-    onRedo: vi.fn(),
-    onStep: vi.fn(),
-    focusPicking: null,
-    onFocusZoom: vi.fn(),
-    onCancelFocusPick: vi.fn(),
-    renderedPreview: null,
-    ...overrides
-  }
-}
-
-function mount(input: Partial<PreviewProps> = {}): HTMLDivElement {
-  container = document.createElement('div')
-  document.body.append(container)
-  root = createRoot(container)
-  act(() => { root?.render(<Preview {...props(input)} />) })
-  return container
-}
-
-function mediaClock(video: HTMLVideoElement, currentTime: number, duration = 10): void {
-  let time = currentTime
-  Object.defineProperty(video, 'currentTime', {
-    configurable: true,
-    get: () => time,
-    set: (value: number) => { time = value }
-  })
-  Object.defineProperty(video, 'duration', { configurable: true, value: duration })
-}
-
-function sourceVideo(app: HTMLDivElement): HTMLVideoElement {
-  const video = app.querySelector('.preview-source-video:not(.preview-rendered-video, .preview-transition-previous)')
-  if (!(video instanceof HTMLVideoElement)) throw new Error('source video missing')
-  return video
-}
-
-function sessionWithSegments(segments: SourceSegment[], playhead = 0): EditSession {
-  const session = createSession(metadata)
-  return { ...session, segments, playhead }
-}
-
-beforeEach(() => {
-  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
-  requestVideoFrameCallback = Object.getOwnPropertyDescriptor(HTMLVideoElement.prototype, 'requestVideoFrameCallback')
-  cancelVideoFrameCallback = Object.getOwnPropertyDescriptor(HTMLVideoElement.prototype, 'cancelVideoFrameCallback')
-  Object.defineProperty(HTMLVideoElement.prototype, 'requestVideoFrameCallback', {
-    configurable: true,
-    value: vi.fn(() => 1)
-  })
-  Object.defineProperty(HTMLVideoElement.prototype, 'cancelVideoFrameCallback', {
-    configurable: true,
-    value: vi.fn()
-  })
-})
-
-afterEach(() => {
-  if (root) act(() => { root?.unmount() })
-  container?.remove()
-  root = undefined
-  container = undefined
-  if (requestVideoFrameCallback) Object.defineProperty(HTMLVideoElement.prototype, 'requestVideoFrameCallback', requestVideoFrameCallback)
-  else Reflect.deleteProperty(HTMLVideoElement.prototype, 'requestVideoFrameCallback')
-  if (cancelVideoFrameCallback) Object.defineProperty(HTMLVideoElement.prototype, 'cancelVideoFrameCallback', cancelVideoFrameCallback)
-  else Reflect.deleteProperty(HTMLVideoElement.prototype, 'cancelVideoFrameCallback')
-  vi.restoreAllMocks()
-})
+import { root, metadata, props, mount, mediaClock, sourceVideo, incomingTransitionVideo, sessionWithSegments } from './preview-test-support'
 
 describe('Preview', () => {
+
+  it('waits for a decoded frame before starting playback', () => {
+    const session = createSession(metadata)
+    const app = mount({ session, playing: false })
+    const video = sourceVideo(app)
+    const play = vi.fn().mockResolvedValue(undefined)
+    video.play = play
+    Object.defineProperty(video, 'readyState', { configurable: true, value: 1 })
+
+    act(() => { root?.render(<Preview {...props({ session, playing: true })} />) })
+    expect(play).not.toHaveBeenCalled()
+
+    Object.defineProperty(video, 'readyState', { configurable: true, value: 2 })
+    act(() => { video.dispatchEvent(new Event('loadeddata')) })
+    expect(play).not.toHaveBeenCalled()
+
+    Object.defineProperty(video, 'readyState', { configurable: true, value: 3 })
+    act(() => { video.dispatchEvent(new Event('canplay')) })
+    expect(play).not.toHaveBeenCalled()
+
+    Object.defineProperty(video, 'readyState', { configurable: true, value: 4 })
+    act(() => { video.dispatchEvent(new Event('canplaythrough')) })
+    expect(play).toHaveBeenCalledOnce()
+  })
+
+  it('shows the preloaded incoming clip when the frame clock reaches a transition before the main decoder switches', () => {
+    const presented = new Map<HTMLVideoElement, VideoFrameRequestCallback[]>()
+    Object.defineProperty(HTMLVideoElement.prototype, 'requestVideoFrameCallback', {
+      configurable: true,
+      value: vi.fn(function (this: HTMLVideoElement, callback: VideoFrameRequestCallback) {
+        const callbacks = presented.get(this) ?? []
+        callbacks.push(callback)
+        presented.set(this, callbacks)
+        return callbacks.length
+      })
+    })
+    const session = createSession({ ...metadata, path: '/first.mp4', name: 'first.mp4' })
+    const sourceId = session.sources[0]?.id
+    if (!sourceId) throw new Error('first source missing')
+    session.sources.push({
+      id: 'second-source',
+      metadata: { ...metadata, path: '/second.mp4', name: 'second.mp4' },
+      playbackPath: '/second.mp4',
+      waveform: []
+    })
+    session.segments = [
+      { id: 'first', sourceId, sourceStart: 0, sourceEnd: 4 },
+      {
+        id: 'second', sourceId: 'second-source', sourceStart: 0, sourceEnd: 5,
+        transition: { effect: 'wipeleft', duration: 0.65 }
+      }
+    ]
+    session.playhead = 3.9
+
+    const onPlayhead = vi.fn()
+    const app = mount({ session, playing: true, onPlayhead })
+    const main = sourceVideo(app)
+    mediaClock(main, 3.9)
+    Object.defineProperty(main, 'readyState', { configurable: true, value: 4 })
+    act(() => { main.dispatchEvent(new Event('loadeddata')) })
+
+    const incoming = incomingTransitionVideo(app)
+    mediaClock(incoming, 0)
+    Object.defineProperty(incoming, 'readyState', { configurable: true, value: 2 })
+    act(() => { incoming.dispatchEvent(new Event('loadedmetadata')) })
+    act(() => { incoming.dispatchEvent(new Event('seeked')) })
+
+    const outgoing = app.querySelector('.preview-transition-previous')
+    if (!(outgoing instanceof HTMLVideoElement)) throw new Error('outgoing transition video missing')
+    mediaClock(outgoing, 4)
+    Object.defineProperty(outgoing, 'readyState', { configurable: true, value: 2 })
+    act(() => { outgoing.dispatchEvent(new Event('loadedmetadata')) })
+    act(() => { outgoing.dispatchEvent(new Event('seeked')) })
+
+    act(() => { presented.get(incoming)?.[0]?.(0, { mediaTime: 0.75 } as VideoFrameCallbackMetadata) })
+    act(() => { presented.get(main)?.[0]?.(0, { mediaTime: 4 } as VideoFrameCallbackMetadata) })
+    expect(main.style.visibility).toBe('hidden')
+    expect(incoming.style.visibility).toBe('visible')
+    expect(incoming.dataset.transition).toBe('wipeleft')
+    expect(outgoing.style.visibility).toBe('visible')
+
+    act(() => { presented.get(incoming)?.[1]?.(0, { mediaTime: 1.075 } as VideoFrameCallbackMetadata) })
+    expect(onPlayhead).toHaveBeenCalledWith(4.325)
+
+    act(() => {
+      root?.render(<Preview {...props({ session: { ...session, playhead: 4.325 }, playing: true, onPlayhead })} />)
+    })
+    expect(parseFloat(incomingTransitionVideo(app).style.clipPath.split(' ')[1] ?? '')).toBeCloseTo(50)
+  })
+
   it('offers a non-destructive way to clear marks', () => {
     const session = createSession(metadata)
     session.marks = [2, 6]
@@ -238,13 +232,20 @@ describe('Preview', () => {
 
     const app = mount({ session, playing: true })
     let incoming = sourceVideo(app)
+    const transitionFallback = incomingTransitionVideo(app)
+    mediaClock(transitionFallback, 4)
+    Object.defineProperty(transitionFallback, 'readyState', { configurable: true, value: 2 })
+    act(() => { transitionFallback.dispatchEvent(new Event('loadedmetadata')) })
+    act(() => { transitionFallback.dispatchEvent(new Event('seeked')) })
     act(() => { incoming.dispatchEvent(new Event('loadeddata')) })
     expect(incoming.style.visibility).toBe('visible')
+    expect(incomingTransitionVideo(app).style.opacity).toBe('0')
 
     const transitioned = { ...session, playhead: 4.25 }
     act(() => { root?.render(<Preview {...props({ session: transitioned, playing: true })} />) })
     incoming = sourceVideo(app)
     expect(incoming.style.visibility).toBe('hidden')
+    expect(incomingTransitionVideo(app).style.visibility).toBe('visible')
     Object.defineProperty(incoming, 'readyState', { configurable: true, value: 2 })
     Object.defineProperty(incoming, 'seeking', { configurable: true, value: false })
     let presented: VideoFrameRequestCallback | undefined
@@ -256,6 +257,7 @@ describe('Preview', () => {
     expect(incoming.style.visibility).toBe('hidden')
     act(() => { presented?.(0, { mediaTime: 4.25 } as VideoFrameCallbackMetadata) })
     expect(incoming.style.visibility).toBe('visible')
+    expect(app.querySelector('.preview-transition-incoming')).toBeNull()
   })
 
   it('starts a playing transition decoder muted and fades in on playing', () => {
@@ -314,7 +316,7 @@ describe('Preview', () => {
     fallback.play = vi.fn().mockResolvedValue(undefined)
     act(() => { fallback.dispatchEvent(new Event('loadedmetadata')) })
     expect(fallback.src).toContain('/second.mp4')
-    expect(fallback.style.visibility).toBe('hidden')
+    expect(fallback.style.opacity).toBe('0')
 
     const switched = { ...session, playhead: 4.05 }
     await act(async () => {
@@ -344,7 +346,7 @@ describe('Preview', () => {
     incoming.currentTime = 0.095
     act(() => { presented?.(0, { mediaTime: 0.095 } as VideoFrameCallbackMetadata) })
     expect(incoming.style.visibility).toBe('visible')
-    expect(fallback.style.visibility).toBe('hidden')
+    expect(fallback.style.opacity).toBe('0')
     expect(incoming.playbackRate).toBe(1)
     expect(incoming.volume).toBe(1)
     expect(fallback.volume).toBe(0)
@@ -383,47 +385,6 @@ describe('Preview', () => {
     expect(setVolume).toHaveBeenLastCalledWith(0)
   })
 
-  it('uses the rendered range in the same stage without source overlays or audio', () => {
-    const session = createSession(metadata)
-    session.playhead = 3
-    const app = mount({ session, renderedPreview: { url: 'media://rendered', start: 2, end: 5 } })
-    expect(app.querySelector('.preview-rendered-video')).not.toBeNull()
-    expect(app.querySelector('.preview-source-video:not(.preview-rendered-video)')).toBeNull()
-    expect(app.querySelector('.visual-overlay')).toBeNull()
-    expect(app.querySelector('audio')).toBeNull()
-    expect(app.querySelector('.transport')).not.toBeNull()
-  })
-
-  it('returns to source media outside the range and retains a full-project final frame', () => {
-    const session = createSession(metadata)
-    session.playhead = 3
-    const rendered = { url: 'media://rendered', start: 2, end: 5 }
-    const app = mount({ session, renderedPreview: rendered })
-    expect(app.querySelector('.preview-rendered-video')).not.toBeNull()
-
-    const sourceSession = { ...session, playhead: 1 }
-    act(() => { root?.render(<Preview {...props({ session: sourceSession, renderedPreview: rendered })} />) })
-    expect(app.querySelector('.preview-rendered-video')).toBeNull()
-    expect(app.querySelector('.preview-source-video:not(.preview-rendered-video)')).not.toBeNull()
-
-    const finalSession = { ...session, playhead: 10 }
-    const fullRendered = { url: rendered.url, start: 0, end: 10 }
-    act(() => { root?.render(<Preview {...props({ session: finalSession, renderedPreview: fullRendered })} />) })
-    expect(app.querySelector('.preview-rendered-video')).not.toBeNull()
-  })
-
-  it('selects the rendered partial preview containing the current playhead', () => {
-    const first = { url: 'media://first-rendered', start: 1, end: 2 }
-    const second = { url: 'media://second-rendered', start: 6, end: 7 }
-    const session = createSession(metadata)
-    session.playhead = 1.5
-    const app = mount({ session, renderedPreviews: [first, second] })
-    expect(app.querySelector('.preview-rendered-video')?.getAttribute('src')).toContain(first.url)
-
-    const secondSession = { ...session, playhead: 6.5 }
-    act(() => { root?.render(<Preview {...props({ session: secondSession, renderedPreviews: [first, second] })} />) })
-    expect(app.querySelector('.preview-rendered-video')?.getAttribute('src')).toContain(second.url)
-  })
 
   it('handles focus picking, camera focus, and source media errors', () => {
     const session = createSession(metadata)

@@ -50,6 +50,16 @@ describe('IPC input validation', () => {
       }]
     }
     expect(parseExportRequest(request)).toEqual(request)
+    const migratedGlobal = parseExportRequest({
+      ...request,
+      canvas: { width: 1080, height: 1920, fps: metadata.fps, fit: 'cover', shortFramePosition: 0.45 },
+      segments: [{ id: 'first', sourceId: 'source', sourceStart: 0, sourceEnd: 3 }]
+    })
+    expect(migratedGlobal.canvas.shortFramePosition).toBeUndefined()
+    expect(migratedGlobal.shortFramePoints).toEqual([{ id: 'short-frame-initial', time: 0, position: 0.45 }])
+    for (const shortFramePosition of [-0.05, 1.05, Number.NaN]) {
+      expect(() => parseExportRequest({ ...request, canvas: { ...request.canvas, shortFramePosition } })).toThrow('Short frame position')
+    }
     expect(() => parseExportRequest({
       ...request,
       segments: [{ ...request.segments[0], kind: 'audio' }, request.segments[1]]
@@ -87,6 +97,83 @@ describe('IPC input validation', () => {
       ...request,
       sources: [{ id: 'source', metadata }, { id: 'source', metadata }]
     })).toThrow('unique')
+  })
+
+  it('accepts bounded Short frame points and migrates legacy moves only on a Short canvas', () => {
+    const request = {
+      canvas: { width: 1080, height: 1920, fps: 24, fit: 'cover' },
+      sources: [{ id: 'source', metadata }], outputPath: '/short.mp4',
+      segments: [{ id: 'segment', sourceId: 'source', sourceStart: 0, sourceEnd: 3 }], overlays: [],
+      shortFramePoints: [
+        { id: 'left', time: 0, position: 0 },
+        { id: 'right', time: 2, position: 1 }
+      ]
+    }
+    expect(parseExportRequest(request)).toEqual(request)
+    expect(() => parseExportRequest({
+      ...request,
+      canvas: { width: 320, height: 180, fps: 24, fit: 'contain' }
+    })).toThrow('YouTube Short')
+    expect(() => parseExportRequest({
+      ...request,
+      shortFramePoints: [{ id: 'bad', time: 0, position: 1.1 }]
+    })).toThrow('position')
+    expect(() => parseExportRequest({
+      ...request,
+      shortFramePoints: [
+        { id: 'one', time: 1, position: 0 },
+        { id: 'two', time: 1.00001, position: 1 }
+      ]
+    })).toThrow('unique times')
+    expect(() => parseExportRequest({
+      ...request,
+      shortFramePoints: Array.from({ length: 202 }, (_, index) => ({ id: `point-${index}`, time: index / 100, position: 0.5 }))
+    })).toThrow('at most 201')
+
+    const legacy = parseExportRequest({
+      ...request,
+      shortFramePoints: undefined,
+      shortFrameMoves: [
+        { id: 'left', start: 0, duration: 1, direction: 'left' },
+        { id: 'right', start: 2, duration: 1, direction: 'right' }
+      ]
+    })
+    expect(legacy.shortFramePoints).toEqual([
+      { id: 'short-frame-legacy-0-start', time: 0, position: 0.5 },
+      { id: 'short-frame-legacy-0-end', time: 1, position: 0 },
+      { id: 'short-frame-legacy-1-start', time: 2, position: 0 },
+      { id: 'short-frame-legacy-1-end', time: 3, position: 1 }
+    ])
+    expect(legacy).not.toHaveProperty('shortFrameMoves')
+    const clampedLegacy = parseExportRequest({
+      ...request,
+      shortFramePoints: undefined,
+      shortFrameMoves: [{ id: 'near-end', start: 2.99995, duration: 0.0001, direction: 'right' }]
+    })
+    expect(clampedLegacy.shortFramePoints?.at(-1)?.time).toBe(3)
+    expect(() => parseExportRequest({
+      ...request,
+      shortFramePoints: undefined,
+      shortFrameMoves: [{ id: 'bad', start: 0, duration: 1, direction: 'up' }]
+    })).toThrow('direction')
+    expect(() => parseExportRequest({
+      ...request,
+      shortFramePoints: undefined,
+      shortFrameMoves: [
+        { id: 'one', start: 0, duration: 2, direction: 'left' },
+        { id: 'two', start: 1, duration: 1, direction: 'right' }
+      ]
+    })).toThrow('overlap')
+    expect(() => parseExportRequest({
+      ...request,
+      shortFramePoints: undefined,
+      shortFrameMoves: [{ id: 'past-end', start: 2.5, duration: 1, direction: 'right' }]
+    })).toThrow('past the timeline')
+    expect(() => parseExportRequest({
+      ...request,
+      shortFramePoints: [{ id: 'point', time: 1, position: 0.5 }],
+      canvas: { ...request.canvas, shortFramePosition: 0.5 }
+    })).toThrow('combined')
   })
 
   it('rejects duplicate segment, overlay, and focus zoom IDs', () => {
@@ -150,16 +237,17 @@ describe('IPC input validation', () => {
     }
     expect(parseExportRequest(request).faceBlurs).toEqual([effect])
     expect(parseExportRequest({ ...request, faceBlurs: [{ ...effect, duration: 0.0005 }] }).faceBlurs?.[0]?.duration).toBe(0.0005)
+    expect(parseExportRequest({ ...request, faceBlurs: [{ ...effect, holdSeconds: 2 }] }).faceBlurs?.[0]?.holdSeconds).toBe(2)
     expect(() => parseExportRequest({ ...request, faceBlurs: [{ ...effect, duration: 0 }] })).toThrow('Face blur duration')
     expect(parseExportRequest({ ...request, faceBlurs: [{ ...effect, style: 'blur' }] }).faceBlurs?.[0]?.style).toBe('blur')
     expect(parseExportRequest({ ...request, faceBlurs: [{ ...effect, style: 'mask' }] }).faceBlurs?.[0]?.style).toBe('mask')
     expect(parseExportRequest({ ...request, faceBlurs: [{ ...effect, detail: 'standard' }] }).faceBlurs?.[0]?.detail).toBe('standard')
-    for (const [field, label] of [
-      ['sensitivity', 'Face blur sensitivity'],
-      ['holdSeconds', 'Face blur hold seconds'],
-      ['strength', 'Face blur strength']
+    for (const [field, label, tooHigh] of [
+      ['sensitivity', 'Face blur sensitivity', 1.1],
+      ['holdSeconds', 'Face blur hold seconds', 2.01],
+      ['strength', 'Face blur strength', 1.1]
     ] as const) {
-      for (const value of [-0.1, 1.1, Number.NaN, Number.POSITIVE_INFINITY, null, '1']) {
+      for (const value of [-0.1, tooHigh, Number.NaN, Number.POSITIVE_INFINITY, null, '1']) {
         expect(() => parseExportRequest({ ...request, faceBlurs: [{ ...effect, [field]: value }] })).toThrow(label)
       }
     }
@@ -169,6 +257,16 @@ describe('IPC input validation', () => {
     expect(() => parseExportRequest({ ...request, faceBlurs: [effect, { ...effect, id: 'second', start: 1 }] })).toThrow('overlap')
     expect(() => parseExportRequest({ ...request, faceBlurs: [effect, { ...effect, start: 2 }] })).toThrow('unique')
     expect(() => parseExportRequest({ ...request, faceBlurs: Array(101).fill(effect) })).toThrow('at most 100')
+  })
+
+  it('accepts a two-second face blur hold in saved sessions and rejects longer values', () => {
+    const faceEffect = {
+      id: 'face', start: 0.5, duration: 1, sensitivity: 0, detail: 'small' as const,
+      holdSeconds: 2, strength: 0.8, style: 'pixelate' as const
+    }
+    const saved = { ...savedSnapshot(), faceBlurs: [faceEffect] }
+    expect(parseSavedSession(saved)).toEqual(saved)
+    expect(() => parseSavedSession({ ...saved, faceBlurs: [{ ...faceEffect, holdSeconds: 2.01 }] })).toThrow('Face blur hold seconds')
   })
 
   it('validates video range transitions', () => {
@@ -197,6 +295,29 @@ describe('IPC input validation', () => {
     expect(() => parseExportRequest({ ...request, videoTransitions: [{ ...transition, into: { effect: 'wipeleft', duration: 0.5 } }] })).toThrow('not supported')
     expect(() => parseExportRequest({ ...request, videoTransitions: [{ ...transition, into: undefined, out: undefined }] })).toThrow('start or end')
     expect(() => parseExportRequest({ ...request, videoTransitions: [transition, { ...transition }] })).toThrow('unique')
+    const earlier = { ...transition, id: 'earlier', start: 0.5, duration: 0.5 }
+    const adjacent = { ...transition, id: 'adjacent', start: 1, duration: 0.5 }
+    expect(parseExportRequest({ ...request, videoTransitions: [adjacent, earlier] }).videoTransitions?.map(({ id }) => id))
+      .toEqual(['earlier', 'adjacent'])
+    expect(parseExportRequest({
+      ...request,
+      videoTransitions: [earlier, { ...adjacent, id: 'roundoff', start: 0.99995 }]
+    }).videoTransitions).toHaveLength(2)
+    expect(() => parseExportRequest({
+      ...request,
+      videoTransitions: [earlier, { ...adjacent, id: 'overlap', start: 0.9 }]
+    })).toThrow('overlap')
+    expect(() => parseExportRequest({
+      ...request,
+      videoTransitions: [earlier, { ...adjacent, id: 'just-overlap', start: 0.99989 }]
+    })).toThrow('overlap')
+    expect(() => parseSavedSession({
+      ...savedSnapshot(),
+      videoTransitions: [
+        { id: 'first-range', start: 0, duration: 1, into: { effect: 'fade', duration: 0.5 } },
+        { id: 'overlap-range', start: 0.5, duration: 1, out: { effect: 'hblur', duration: 0.5 } }
+      ]
+    })).toThrow('overlap')
   })
 
   it('validates text presets and prepared local bitmap geometry', () => {
@@ -329,6 +450,28 @@ describe('IPC input validation', () => {
     expect(() => parseSavedSession({ ...legacy, marks: 'bad' })).toThrow('Marks')
     expect(() => parseSavedSession({ ...legacy, marks: null })).toThrow('Marks')
     expect(() => parseSavedSession({ ...legacy, marks: undefined })).toThrow('Marks')
+  })
+
+  it('migrates legacy Short framing into explicit points, including the full legacy bound', () => {
+    const shortMetadata = { ...metadata, duration: 301 }
+    const legacyMoves = Array.from({ length: 100 }, (_, index) => ({
+      id: `move-${index}`,
+      start: index * 3 + 1,
+      duration: 1,
+      direction: index % 2 === 0 ? 'left' : 'right'
+    }))
+    const legacy = {
+      canvas: { width: 1080, height: 1920, fps: 24, fit: 'cover', shortFramePosition: 0.3 },
+      sources: [{ id: 'source', metadata: shortMetadata }],
+      segments: [{ id: 'segment', sourceId: 'source', sourceStart: 0, sourceEnd: 301 }],
+      overlays: [], selectedOverlayId: null, playhead: 0, marks: [], shortFrameMoves: legacyMoves
+    }
+    const migrated = parseSavedSession(legacy)
+    expect(migrated.canvas.shortFramePosition).toBeUndefined()
+    expect(migrated.shortFramePoints).toHaveLength(201)
+    expect(migrated.shortFramePoints?.[0]).toEqual({ id: 'short-frame-initial', time: 0, position: 0.3 })
+    expect(migrated).not.toHaveProperty('shortFrameMoves')
+    expect(parseExportRequest({ ...migrated, outputPath: '/short.mp4' }).shortFramePoints).toHaveLength(201)
   })
 
   it('allows only plain MP4 export names', () => {

@@ -8,14 +8,17 @@ const script = resolve('scripts/install-dev-desktop.mjs')
 
 const devDesktop = `[Desktop Entry]
 Type=Application
-Name=OneTrackCat
-Comment=Turn gameplay into highlights.
+Version=1.0
+Name=OneTrackCat Dev
+Comment=Run the OneTrackCat development build
 Icon=OneTrackCat
-Exec=/usr/bin/false
+Exec=/usr/bin/systemd-run --user --collect --quiet --unit=one-track-cat-dev --same-dir /usr/local/bin/npm run dev
+Path=${resolve('.')}
 Terminal=false
-NoDisplay=true
 Categories=AudioVideo;Video;
+StartupNotify=false
 StartupWMClass=OneTrackCat
+X-OneTrackCat-Development=true
 `
 
 function run(dataHome: string): void {
@@ -60,6 +63,24 @@ MimeType=video/mp4;video/quicktime;video/x-matroska;video/webm;
     try {
       expect(existsSync(desktopPath(dataHome))).toBe(false)
       run(dataHome)
+      run(dataHome)
+      expect(readFileSync(desktopPath(dataHome), 'utf8')).toBe(devDesktop)
+    } finally {
+      rmSync(dataHome, { recursive: true, force: true })
+    }
+  })
+
+  it('updates an existing development entry', () => {
+    const dataHome = mkdtempSync(join(tmpdir(), 'otc-dev-desktop-'))
+    mkdirSync(join(dataHome, 'applications'), { recursive: true })
+    writeFileSync(desktopPath(dataHome), `[Desktop Entry]
+Type=Application
+Name=OneTrackCat Dev
+Exec=/usr/local/bin/npm run dev
+Terminal=false
+`)
+
+    try {
       run(dataHome)
       expect(readFileSync(desktopPath(dataHome), 'utf8')).toBe(devDesktop)
     } finally {

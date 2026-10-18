@@ -148,9 +148,11 @@ std::vector<std::string> splitTsv(const std::string& line) {
   return fields;
 }
 
-float parseRange(const std::string& value, const char* label) {
+float parseRange(const std::string& value, const char* label, double maximum = 1.0) {
   const double number = parseDouble(value, label);
-  if (number < 0.0 || number > 1.0) usageError(std::string(label) + " must be between 0 and 1");
+  if (number < 0.0 || number > maximum) {
+    usageError(std::string(label) + " must be between 0 and " + std::to_string(maximum));
+  }
   return static_cast<float>(number);
 }
 
@@ -177,9 +179,8 @@ std::vector<Effect> readEffects(const std::filesystem::path& path) {
     }
     if (detail != 0 && detail != 1) usageError("effect detail must be 0 or 1");
     if (style < 0 || style > 2) usageError("effect style must be 0, 1, or 2");
-    const float hold = parseRange(fields[4], "effect hold_seconds");
+    const float hold = parseRange(fields[4], "effect hold_seconds", maximumHoldSeconds);
     const float strength = parseRange(fields[5], "effect strength");
-    if (hold > 1.0F) usageError("effect hold_seconds must be <= 1");
     effects.push_back({start, end, parseRange(fields[2], "effect sensitivity"), detail == 1,
                        hold, strength, style});
     previousEnd = end;

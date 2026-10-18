@@ -8,6 +8,7 @@ import type {
   VideoTransition
 } from '@shared/types'
 import { timedRangesAfterInsertion } from './timed-ranges'
+import { shortFramePointsAfterInsertion } from './short-frame'
 import { isFreezeSegment, segmentOutputDuration, segmentPlaybackRate, segmentSourceDuration, timelineDuration } from '@shared/segment-time'
 
 export { isFreezeSegment, segmentOutputDuration, segmentPlaybackRate, segmentSourceDuration, timelineDuration } from '@shared/segment-time'
@@ -26,7 +27,7 @@ export function segmentSourceStart(segment: SourceSegment): number { return isFr
 function segmentSourceEnd(segment: SourceSegment): number { return isFreezeSegment(segment) ? segment.sourceTime : segment.sourceEnd }
 export function createSession(source: MediaMetadata, short = false): EditSession {
   const sourceId = makeId('source')
-  // A fixed Short canvas keeps the centered cover crop identical in preview and export.
+  // A fixed Short canvas keeps framing geometry identical in preview and export.
   return {
     canvas: {
       width: short ? 1080 : source.width,
@@ -41,6 +42,7 @@ export function createSession(source: MediaMetadata, short = false): EditSession
     playhead: 0,
     marks: [],
     focusZooms: [],
+    shortFramePoints: [],
     faceBlurs: [],
     videoTransitions: []
   }
@@ -271,6 +273,9 @@ export function insertOutputGap(session: EditSession, point: number, duration: n
     ...session,
     overlays: overlaysAfterInsertion(session.overlays, point, duration),
     focusZooms: timedRangesAfterInsertion(session.focusZooms, point, duration),
+    ...(session.shortFramePoints === undefined ? {} : {
+      shortFramePoints: shortFramePointsAfterInsertion(session.shortFramePoints, point, duration)
+    }),
     ...(faceBlurs === undefined ? {} : { faceBlurs }),
     ...(session.videoTransitions === undefined ? {} : {
       videoTransitions: timedRangesAfterInsertion(session.videoTransitions, point, duration)

@@ -27,6 +27,19 @@ export interface SecondaryPreviewMedia {
   rate: number
 }
 
+export function incomingTransitionMedia(
+  session: EditSession,
+  position: TimelinePosition | null
+): SecondaryPreviewMedia {
+  if (!position) return { path: '', time: 0, rate: 0 }
+  const next = session.segments[position.segmentIndex + 1]
+  const transition = next?.kind !== 'freeze' ? next?.transition : undefined
+  const source = next && transition ? sourceForSegment(session, next) : null
+  return next && source
+    ? { path: source.playbackPath, time: segmentSourceStart(next), rate: 0 }
+    : { path: '', time: 0, rate: 0 }
+}
+
 export function secondaryPreviewMedia(
   session: EditSession,
   position: TimelinePosition | null,
@@ -46,14 +59,15 @@ export function secondaryPreviewMedia(
 
   const nextSegment = session.segments[position.segmentIndex + 1]
   const nextTransition = nextSegment?.kind !== 'freeze' ? nextSegment?.transition : undefined
+  if (nextTransition && !isFreezeSegment(position.segment)) {
+    // Decode the exact outgoing overlap frame early so seeking straight to a
+    // transition does not spend the short effect waiting on a second decoder.
+    return { path: currentPath, time: position.segment.sourceEnd, rate: 0 }
+  }
   const nextSource = nextSegment && !nextTransition ? sourceForSegment(session, nextSegment) : null
   if (nextSegment && nextSource) {
     return { path: nextSource.playbackPath, time: segmentSourceStart(nextSegment), rate: 0 }
   }
 
-  const rate = !isFreezeSegment(position.segment) && nextTransition &&
-    position.segment.sourceEnd - position.sourceTime <= segmentPlaybackRate(position.segment)
-    ? segmentPlaybackRate(position.segment)
-    : 0
-  return { path: currentPath, time: position.sourceTime, rate }
+  return { path: currentPath, time: position.sourceTime, rate: 0 }
 }

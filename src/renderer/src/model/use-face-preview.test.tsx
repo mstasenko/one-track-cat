@@ -1,8 +1,9 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { EditSession, JobProgress } from '@shared/types'
+import type { EditSession, FacePreviewRequest, JobProgress } from '@shared/types'
 import { useFacePreview, type FacePreviewState } from './use-face-preview'
+import { validatedPreviewRange } from '../../../main/preview-range'
 
 const session: EditSession = {
   canvas: { width: 320, height: 180, fps: 30, fit: 'contain' },
@@ -105,6 +106,24 @@ describe('useFacePreview', () => {
     expect(window.otc.previewFaces).toHaveBeenCalledWith(expect.objectContaining({ previewRange: selectedEffectRange }))
     expect(container?.querySelector('output')?.getAttribute('data-start')).toBe('3')
     expect(container?.querySelector('output')?.getAttribute('data-end')).toBe('4')
+  })
+
+  it('previews the last selected section when the clip ends between frame boundaries', async () => {
+    const fractional = {
+      ...selectedSession,
+      segments: [{ id: 'segment', sourceId: 'source', sourceStart: 0, sourceEnd: 9.01 }],
+      marks: [6], playhead: 7
+    }
+    const onError = vi.fn()
+    window.otc.previewFaces = vi.fn((request: FacePreviewRequest) => {
+      expect(validatedPreviewRange(request.previewRange, request)).toEqual([6, 271 / 30])
+      return Promise.resolve('preview-url')
+    })
+    render(null, onError, fractional)
+    await act(async () => { await currentState?.start(fractional) })
+    expect(window.otc.previewFaces).toHaveBeenCalledWith(expect.objectContaining({ previewRange: [6, 9.01] }))
+    expect(onError).not.toHaveBeenCalled()
+    expect(container?.querySelector('output')?.getAttribute('data-end')).toBe(String(271 / 30))
   })
 
   it('keeps disjoint partial previews available at their respective playheads', async () => {
@@ -245,7 +264,7 @@ describe('useFacePreview', () => {
     act(() => { root?.render(<PreviewHarness session={selectedSession} job={null} previewRange={[6, 7]} />) })
     resolvePreview('captured-preview-url')
     await act(async () => { await pending })
-    expect(previewFaces).toHaveBeenCalledWith(expect.objectContaining({ previewRange: [91 / 30, 121 / 30] }))
+    expect(previewFaces).toHaveBeenCalledWith(expect.objectContaining({ previewRange: firstRange }))
     expect(container?.querySelector('output')?.getAttribute('data-url')).toBe('captured-preview-url')
     expect(container?.querySelector('output')?.getAttribute('data-start')).toBe(String(91 / 30))
     expect(container?.querySelector('output')?.getAttribute('data-end')).toBe(String(121 / 30))

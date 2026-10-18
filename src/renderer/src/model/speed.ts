@@ -8,6 +8,7 @@ import {
   withTransition
 } from './timeline'
 import { splitSegmentForOutputRange } from './segment-ranges'
+import { remapShortFramePoints } from './short-frame'
 
 const EPSILON = 0.0001
 
@@ -66,6 +67,9 @@ export function applySpeedToOutputRange(session: EditSession, rawStart: number, 
     const mappedStart = map(effect.start)
     return { ...effect, start: mappedStart, duration: Math.max(EPSILON, map(effect.start + effect.duration) - mappedStart) }
   })
+  const shortFramePoints = session.shortFramePoints === undefined
+    ? undefined
+    : remapShortFramePoints(session.shortFramePoints, map)
   const faceBlurs = session.faceBlurs?.map((effect) => {
     const mappedStart = map(effect.start)
     return { ...effect, start: mappedStart, duration: Math.max(EPSILON, map(effect.start + effect.duration) - mappedStart) }
@@ -82,6 +86,7 @@ export function applySpeedToOutputRange(session: EditSession, rawStart: number, 
     marks,
     playhead,
     focusZooms,
+    ...(shortFramePoints === undefined ? {} : { shortFramePoints }),
     ...(faceBlurs === undefined ? {} : { faceBlurs }),
     ...(videoTransitions === undefined ? {} : { videoTransitions })
   }

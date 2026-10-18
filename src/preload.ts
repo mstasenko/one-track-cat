@@ -15,6 +15,8 @@ import type { OnlineTemplate, TemplateCategory, TemplateSource } from './online-
 
 const api: otcApi = {
   openVideo: () => ipcRenderer.invoke('dialog:open-video') as Promise<string | null>,
+  openVideoPath: (path: string) =>
+    ipcRenderer.invoke('video:open-path', path) as Promise<string | VideoDirectory>,
   listVideoDirectory: (directory?: string) =>
     ipcRenderer.invoke('video:list', directory) as Promise<VideoDirectory>,
   authorizeVideo: (path: string) =>
@@ -34,13 +36,16 @@ const api: otcApi = {
   previewFaces: (request: ExportRequest) => ipcRenderer.invoke('faces:preview', request) as Promise<string>,
   restoreFacePreview: (request: ExportRequest) =>
     ipcRenderer.invoke('faces:restore', request) as Promise<FacePreviewResult[]>,
-  chooseExportPath: (defaultName: string) =>
-    ipcRenderer.invoke('dialog:export-path', defaultName) as Promise<string | null>,
+  chooseExportPath: (defaultName: string, path?: string) =>
+    (path === undefined
+      ? ipcRenderer.invoke('dialog:export-path', defaultName)
+      : ipcRenderer.invoke('dialog:export-path', defaultName, path)) as Promise<string | null>,
   exportVideo: (request: ExportRequest) =>
     ipcRenderer.invoke('export:start', request) as Promise<void>,
   loadSession: () => ipcRenderer.invoke('session:load') as Promise<SavedSession | null>,
   saveSession: (session: SavedSession) => ipcRenderer.invoke('session:save', session) as Promise<void>,
   resetSession: () => ipcRenderer.invoke('session:reset') as Promise<void>,
+  clearFaceCache: () => ipcRenderer.invoke('face-cache:clear') as Promise<void>,
   cancelJob: (id: string) => ipcRenderer.invoke('job:cancel', id) as Promise<boolean>,
   getGpuDiagnostics: () => ipcRenderer.invoke('gpu:diagnostics') as Promise<GpuDiagnostics>,
   getPathUrl: (path: string) => ipcRenderer.invoke('media:url', path) as Promise<string>,

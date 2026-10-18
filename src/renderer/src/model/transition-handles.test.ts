@@ -31,6 +31,11 @@ function legacySession(): EditSession {
   ]
   session.marks = [2, 10.5, 11]
   session.focusZooms = [{ id: 'focus', start: 8, duration: 4, zoom: 1.5, focusX: 0.5, focusY: 0.5 }]
+  session.shortFramePoints = [
+    { id: 'before', time: 7, position: 0 },
+    { id: 'removed', time: 9.5, position: 0.5 },
+    { id: 'after', time: 10, position: 1 }
+  ]
   session.faceBlurs = [{ id: 'blur', start: 8, duration: 4, sensitivity: 0.5, detail: 'standard', holdSeconds: 0.2, strength: 0.5, style: 'blur' }]
   session.videoTransitions = [{ id: 'range', start: 8, duration: 4, into: { effect: 'fade', duration: 1 } }]
   session.playhead = 10.5
@@ -68,6 +73,10 @@ describe('legacy transition handles', () => {
       { id: 'after', start: 9.5, duration: 1 }
     ])
     expect(result.focusZooms).toEqual([{ id: 'focus', start: 8, duration: 3, zoom: 1.5, focusX: 0.5, focusY: 0.5 }])
+    expect(result.shortFramePoints).toEqual([
+      { id: 'before', time: 7, position: 0 },
+      { id: 'after', time: 9, position: 1 }
+    ])
     expect(result.faceBlurs).toEqual([expect.objectContaining({ id: 'blur', start: 8, duration: 3 })])
     expect(result.videoTransitions).toEqual([expect.objectContaining({ id: 'range', start: 8, duration: 3 })])
     expect(result.sources).toEqual(sourceBefore)

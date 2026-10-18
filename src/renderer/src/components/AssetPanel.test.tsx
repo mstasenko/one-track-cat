@@ -144,6 +144,14 @@ describe('asset panel', () => {
     expect(onReplay).not.toHaveBeenCalled()
   })
 
+  it('leaves Short framing to the timeline controls, not a range effect', () => {
+    const session = createSession(metadata, true)
+    session.marks = [2, 6]
+    session.playhead = 3
+    const app = mount({ session })
+    expect(app.textContent).not.toContain('Move Frame')
+  })
+
   it('configures insertion transitions and reports the chosen values', () => {
     const onInsert = vi.fn()
     const app = mount({ onInsert })
@@ -154,6 +162,7 @@ describe('asset panel', () => {
     const back = selects[1]
     const duration = selects[2]
     if (!into || !back || !duration) throw new Error('transition controls missing')
+    expect(duration.value).toBe('2')
     selectValue(into, 'fade')
     selectValue(back, 'wipeleft')
     selectValue(duration, '1')

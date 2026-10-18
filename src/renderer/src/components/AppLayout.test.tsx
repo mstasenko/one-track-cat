@@ -14,9 +14,10 @@ vi.mock('./Preview', () => ({
   )
 }))
 vi.mock('./Timeline', () => ({
-  Timeline: ({ onSeek }: { onSeek: (time: number) => void }) => (
+  Timeline: ({ onSeek, onNudgeFrame }: { onSeek: (time: number) => void; onNudgeFrame: (direction: 'left' | 'right') => void }) => <>
     <button data-testid="timeline-seek" onClick={() => onSeek(4)}>Timeline seek</button>
-  )
+    <button data-testid="timeline-frame-left" onClick={() => onNudgeFrame('left')}>Frame left</button>
+  </>
 }))
 
 type ExportProgressProps = Parameters<typeof ExportProgress>[0]
@@ -221,6 +222,21 @@ describe('export progress scanner', () => {
 })
 
 describe('editor workspace playback callbacks', () => {
+  it('pauses playback before setting a Short frame point', () => {
+    const onPlayingChange = vi.fn()
+    const nudgeShortFrame = vi.fn()
+    const app = renderWorkspace({
+      onPlayingChange,
+      store: { ...workspaceProps().store, nudgeShortFrame } as EditorState
+    })
+    const arrow = app.querySelector('[data-testid="timeline-frame-left"]')
+    if (!(arrow instanceof HTMLButtonElement)) throw new Error('framing callback missing')
+    act(() => { arrow.click() })
+    expect(onPlayingChange).toHaveBeenCalledWith(false)
+    expect(nudgeShortFrame).toHaveBeenCalledWith('left')
+    expect(onPlayingChange.mock.invocationCallOrder[0]).toBeLessThan(nudgeShortFrame.mock.invocationCallOrder[0] ?? 0)
+  })
+
   it('updates the playhead from preview playback without pausing or clearing face selection', () => {
     const onPlayingChange = vi.fn()
     const onSelectFaceBlur = vi.fn()

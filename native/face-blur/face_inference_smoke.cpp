@@ -60,8 +60,8 @@ float parseThreshold(const std::string& value) {
   std::size_t consumed = 0U;
   try {
     const float threshold = std::stof(value, &consumed);
-    if (consumed != value.size() || !std::isfinite(threshold) || threshold < 0.05F || threshold > 0.60F) {
-      fail("--threshold must be in [0.05,0.60]");
+    if (consumed != value.size() || !std::isfinite(threshold) || threshold < 0.05F || threshold > 0.99F) {
+      fail("--threshold must be in [0.05,0.99]");
     }
     return threshold;
   } catch (const std::exception&) {
@@ -75,7 +75,7 @@ Options parseOptions(int argc, char** argv) {
     const std::string argument = argv[index];
     if (argument == "--help") {
       std::cout << "usage: otc-face-blur-smoke --model MODEL.xml --fixture LARGE.ppm "
-                    "--small-fixture SMALL.ppm --device CPU [--threshold 0.05..0.60]\n";
+                    "--small-fixture SMALL.ppm --device CPU [--threshold 0.05..0.99]\n";
       std::exit(0);
     }
     if (argument == "--model") options.model = requireValue(argc, argv, index, "--model");
@@ -133,7 +133,10 @@ Image readPpm(const std::filesystem::path& path) {
 }
 
 float sensitivityForThreshold(float threshold) {
-  return std::clamp(1.0F - (threshold - 0.05F) / 0.55F, 0.0F, 1.0F);
+  // Invert the stricter low-sensitivity extension above the old midpoint;
+  // retain the established inverse at and below threshold 0.325.
+  if (threshold > 0.325F) return std::clamp((0.99F - threshold) / 1.33F, 0.0F, 1.0F);
+  return std::clamp((0.60F - threshold) / 0.55F, 0.0F, 1.0F);
 }
 
 std::size_t changedPixelsInBoxes(const std::vector<std::uint8_t>& before,

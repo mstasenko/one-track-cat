@@ -12,7 +12,8 @@ export function usePresentedOutputTime(
   session: EditSession,
   segmentIndex: number,
   playing: boolean,
-  mediaKey: string
+  mediaKey: string,
+  mediaTimeOffset = 0
 ): number {
   const [frame, setFrame] = useState<PresentedFrame | null>(null)
   const segment = session.segments[segmentIndex]
@@ -39,7 +40,7 @@ export function usePresentedOutputTime(
       if (!active) return
       setFrame({
         segmentId: segment.id,
-        outputTime: outputTimeForSource(session.segments, segmentIndex, sourceTime)
+        outputTime: outputTimeForSource(session.segments, segmentIndex, sourceTime - mediaTimeOffset)
       })
     }
     const scheduleFallback = (delay: number): void => {
@@ -64,7 +65,7 @@ export function usePresentedOutputTime(
       clearFallbackTimer()
       video.cancelVideoFrameCallback(callbackId)
     }
-  }, [mediaKey, playing, segment, segmentIndex, session.canvas.fps, session.segments, videoRef])
+  }, [mediaKey, mediaTimeOffset, playing, segment, segmentIndex, session.canvas.fps, session.segments, videoRef])
 
   return playing && frame && frame.segmentId === segment?.id ? frame.outputTime : session.playhead
 }

@@ -15,6 +15,9 @@ interface TransitionStyles {
 
 export interface TransitionPreview {
   active: ActiveTransition
+  currentSourceTime: number
+  currentPath: string
+  currentPlaybackRate: number
   previousSourceTime: number
   previousPath: string
   previousPlaybackRate: number
@@ -44,7 +47,7 @@ function currentStyle(effect: TransitionEffect, progress: number): CSSProperties
   const remaining = 1 - progress
   switch (effect) {
     case 'fade':
-      return { opacity: progress }
+      return { opacity: progress * progress * (3 - 2 * progress) }
     case 'dissolve':
       return { opacity: progress, filter: `blur(${remaining * 5}px)` }
     case 'wipeleft':
@@ -93,12 +96,14 @@ export function transitionPreviewAtOutputTime(
   session: EditSession,
   outputTime: number
 ): TransitionPreview | null {
+  const position = positionAtOutputTime(session.segments, outputTime)
   const active = transitionAtOutputTime(session.segments, outputTime)
-  if (!active) return null
+  if (!active || !position) return null
   const previous = session.segments[active.previousSegmentIndex]
   if (!previous) return null
-  const source = sourceForSegment(session, previous)
-  if (!source) return null
+  const previousSource = sourceForSegment(session, previous)
+  const currentSource = sourceForSegment(session, position.segment)
+  if (!previousSource || !currentSource) return null
   const styles = transitionStyles(active)
   const rangeStyle = videoRangeStyleAtTime(session.videoTransitions ?? [], outputTime)
   const merge = (style: CSSProperties): CSSProperties => ({
@@ -110,12 +115,15 @@ export function transitionPreviewAtOutputTime(
   })
   return {
     active,
-    previousPath: source.playbackPath,
+    currentSourceTime: position.sourceTime,
+    currentPath: currentSource.playbackPath,
+    currentPlaybackRate: isFreezeSegment(position.segment) ? 0 : (position.segment.playbackRate ?? 1),
+    previousPath: previousSource.playbackPath,
     previousPlaybackRate: isFreezeSegment(previous) ? 0 : (previous.playbackRate ?? 1),
     // Continue past the cut using available source footage; never rewind the tail.
     previousSourceTime: isFreezeSegment(previous)
       ? previous.sourceTime
-      : Math.min(source.metadata.duration - 1 / source.metadata.fps,
+      : Math.min(previousSource.metadata.duration - 1 / previousSource.metadata.fps,
         previous.sourceEnd + active.progress * active.duration * (previous.playbackRate ?? 1)),
     styles: { current: merge(styles.current), previous: merge(styles.previous) }
   }

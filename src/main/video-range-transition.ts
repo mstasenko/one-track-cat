@@ -16,7 +16,11 @@ function edgeWeight(time: string, start: number, duration: number, outgoing = fa
   return `between(${time},${seconds(start)},${seconds(start + duration)})*(${outgoing ? ramp : `1-${ramp}`})`
 }
 
-function frameBlend(name: string, weights: string[], initialOpacity: number): string {
+function activeWeight(weights: string[], time: string): string {
+  return weights.map((weight) => weight.replaceAll(time, 't')).join('+')
+}
+
+function frameBlend(name: string, weights: string[], initialOpacity: number, time: string): string {
   const weight = weights.length === 1 ? weights[0] : `max(${weights.join(',')})`
   // Evaluate once per frame, not once per pixel. Send after blending to avoid
   // framesync read-ahead applying future opacity to buffered frames. The command
@@ -26,7 +30,8 @@ function frameBlend(name: string, weights: string[], initialOpacity: number): st
   const initial = planes.map((plane) => `c${plane}_opacity=${initialOpacity}`).join(':')
   // Set planes directly: FFmpeg's all_opacity command does not restore 1.0.
   const commands = planes.map((plane) => `[expr] blend@${name} c${plane}_opacity ${opacity}`).join(',')
-  return `blend@${name}=all_mode=normal:${initial},sendcmd=c='0 ${commands}'`
+  // Keep sendcmd priming the next frame, but bypass per-pixel blending between transition edges.
+  return `blend@${name}=all_mode=normal:${initial}:enable='gt(${activeWeight(weights, time)},0)',sendcmd=c='0 ${commands}'`
 }
 
 export function addVideoRangeTransitionFilters(filters: string[], request: ExportRequest, input: string): string {
@@ -48,7 +53,7 @@ export function addVideoRangeTransitionFilters(filters: string[], request: Expor
       filters.push(
         `[${current}]null[${clean}]`,
         `color=c=black:s=${request.canvas.width}x${request.canvas.height}:r=${request.canvas.fps}:d=${seconds(timelineDuration(request.segments))},settb=AVTB[${black}]`,
-        `[${clean}][${black}]${frameBlend(output, fadeWeights, effect.start === 0 && (effect.into?.effect === 'fade' || effect.into?.effect === 'dissolve') ? 0 : 1)}[${output}]`
+        `[${clean}][${black}]${frameBlend(output, fadeWeights, effect.start === 0 && (effect.into?.effect === 'fade' || effect.into?.effect === 'dissolve') ? 0 : 1, nextTime)}[${output}]`
       )
       current = output
     }
@@ -65,11 +70,11 @@ export function addVideoRangeTransitionFilters(filters: string[], request: Expor
       const blurInput = `vrblurin${index}`
       const blurred = `vrblur${index}`
       const output = `vrout${index}`
-      const active = blurWeights.map((weight) => weight.replaceAll(nextTime, 't')).join('+')
+      const active = activeWeight(blurWeights, nextTime)
       filters.push(
         `[${current}]split=2[${clean}][${blurInput}]`,
         `[${blurInput}]gblur=sigma=18:steps=2:enable='gt(${active},0)'[${blurred}]`,
-        `[${clean}][${blurred}]${frameBlend(output, blurWeights, effect.start === 0 && (effect.into?.effect === 'hblur' || effect.into?.effect === 'dissolve') ? 0 : 1)}[${output}]`
+        `[${clean}][${blurred}]${frameBlend(output, blurWeights, effect.start === 0 && (effect.into?.effect === 'hblur' || effect.into?.effect === 'dissolve') ? 0 : 1, nextTime)}[${output}]`
       )
       current = output
     }

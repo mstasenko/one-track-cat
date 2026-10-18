@@ -1,7 +1,6 @@
 import { randomUUID } from 'node:crypto'
-import { mkdir, mkdtemp, rename, rm, writeFile } from 'node:fs/promises'
-import { dirname, extname, join } from 'node:path'
-import { tmpdir } from 'node:os'
+import { mkdir, mkdtemp, rename, rm } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
 import type { ExportRequest, Overlay, SourceSegment, VisualOverlayBase } from '../types'
 import { exportEncoders, integratedDecodeDevice, softwareEncoder } from './export-encoder'
 import { ensureDiskSpace, ensureFaceExportDiskSpace } from './export-space'
@@ -18,6 +17,9 @@ import { clippedFaceRequest, previewFilterGraph, type PreviewRange } from './pre
 import { applyPreviewSeek, prepareTimelineInputs, preparePreviewSeek, type PreviewSeekPlan } from './preview-seek'
 import { addVideoRangeTransitionFilters } from './video-range-transition'
 import { frameAlphaFilter } from './frame-alpha'
+import { isShortCanvas, shortFramePositionExpression } from '../short-frame'
+import { overlayInputArgs } from './export-inputs'
+export { loopsInput } from './export-inputs'
 
 export { prepareTimelineInputs } from './preview-seek'
 export { estimatedExportBytes, ensureFaceExportDiskSpace } from './export-space'
@@ -61,30 +63,6 @@ function audioTempoFilter(rate: number): string {
   return factors.map((factor) => `atempo=${factor}`).join(',')
 }
 
-async function prepareRenderedImage(
-  overlay: Pick<Overlay, 'id' | 'name'>,
-  dataUrl: string | undefined,
-  directory: string
-): Promise<string> {
-  if (!dataUrl?.startsWith('data:image/png;base64,')) {
-    throw new Error(`Overlay “${overlay.name}” was not rendered before export`)
-  }
-  const path = join(directory, `${overlay.id}.png`)
-  const encoded = dataUrl.slice('data:image/png;base64,'.length)
-  await writeFile(path, Buffer.from(encoded, 'base64'))
-  return path
-}
-
-async function prepareVisualPath(overlay: Overlay, directory: string): Promise<string> {
-  if (overlay.type === 'text') return prepareRenderedImage(overlay, overlay.renderedTextBitmap?.dataUrl, directory)
-  if (overlay.type === 'audio') throw new Error('Audio overlays do not have a visual path')
-  if (extname(overlay.path).toLowerCase() !== '.svg') return overlay.path
-  return prepareRenderedImage(
-    overlay,
-    overlay.type === 'image' ? overlay.renderedImageDataUrl : undefined,
-    directory
-  )
-}
 
 function visualGeometry(overlay: VisualOverlayBase, width: number, height: number): {
   width: number
@@ -130,11 +108,15 @@ function addSegmentFilters(filters: string[], request: ExportRequest): {
 } {
   const videoSegments: string[] = []
   const audioSegments: string[] = []
-  request.segments.forEach((segment, index) => addSegmentFilter(filters, request, segment, index, videoSegments, audioSegments))
+  let outputStart = 0
+  request.segments.forEach((segment, index) => {
+    addSegmentFilter(filters, request, segment, index, outputStart, videoSegments, audioSegments)
+    outputStart += segmentOutputDuration(segment)
+  })
   return { videoSegments, audioSegments }
 }
 
-function addSegmentFilter(filters: string[], request: ExportRequest, segment: SourceSegment, index: number, videoSegments: string[], audioSegments: string[]): void {
+function addSegmentFilter(filters: string[], request: ExportRequest, segment: SourceSegment, index: number, outputStart: number, videoSegments: string[], audioSegments: string[]): void {
     const { inputIndex, source } = exportSegmentSource(request, segment)
     const playbackRate = segmentPlaybackRate(segment)
     const segmentDuration = segmentOutputDuration(segment)
@@ -144,7 +126,7 @@ function addSegmentFilter(filters: string[], request: ExportRequest, segment: So
     const handle = next?.kind !== 'freeze' ? next?.transition?.duration ?? 0 : 0
     const videoDuration = segmentDuration + handle
     const { fps } = request.canvas
-    const scaleAndCrop = exportScaleAndCrop(request)
+    const scaleAndCrop = exportScaleAndCrop(request, outputStart)
     if (segment.kind === 'freeze') {
       // Scale the still once before cloning it; tpad needs a known frame rate.
       filters.push(`[${inputIndex}:v:0]trim=start=${seconds(segment.sourceTime)},setpts=PTS-STARTPTS,select='eq(n,0)',${scaleAndCrop},setsar=1,fps=${fps},tpad=stop_mode=clone:stop_duration=${seconds(videoDuration)},trim=duration=${seconds(videoDuration)},settb=AVTB,format=yuv420p[vseg${index}]`)
@@ -186,8 +168,14 @@ function exportSegmentSource(request: ExportRequest, segment: SourceSegment): { 
   return { inputIndex, source }
 }
 
-function exportScaleAndCrop(request: ExportRequest): string {
+function exportScaleAndCrop(request: ExportRequest, outputStart: number): string {
   const { width, height, fit } = request.canvas
+  if (isShortCanvas(request.canvas)) {
+    const time = outputStart > 0 ? `(t+${seconds(outputStart)})` : 't'
+    const position = shortFramePositionExpression(request.shortFramePoints ?? [], time, request.canvas.shortFramePosition)
+    return `scale=${width}:${height}:force_original_aspect_ratio=increase,` +
+      `crop=${width}:${height}:x='(iw-ow)*(${position})':y='(ih-oh)/2'`
+  }
   return fit === 'cover'
     ? `scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height}`
     : `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:color=black`
@@ -221,10 +209,52 @@ function addVideoBaseFilters(
     const nextLabel = required(videoSegments[index], 'A timeline video segment is missing')
     const joinedLabel = `[vjoin${index}]`
     if (segment.kind !== 'freeze' && segment.transition) {
+      const duration = segment.transition.duration
+      const transition = segment.transition.effect === 'fade'
+        ? "custom:expr='A*(P*P*(3-2*P))+B*(1-P*P*(3-2*P))'"
+        : segment.transition.effect
+      const prefix = `vprefix${index}`
+      const outgoing = `voutgoing${index}`
+      const mixed = `vmixed${index}`
+      const incomingHead = `vincoming${index}`
+      const incomingRemainder = `vremainder${index}`
+      const prefixLabel = `[${prefix}]`
+      const outgoingLabel = `[${outgoing}]`
+      const mixedLabel = `[${mixed}]`
+      const incomingHeadLabel = `[${incomingHead}]`
+      const incomingRemainderLabel = `[${incomingRemainder}]`
+      const trimmedPrefixLabel = `[${prefix}trimmed]`
+      const trimmedOutgoingLabel = `[${outgoing}trimmed]`
+      const trimmedIncomingHeadLabel = `[${incomingHead}trimmed]`
+      const trimmedIncomingRemainderLabel = `[${incomingRemainder}trimmed]`
+      const nextSegment = request.segments[index + 1]
+      const nextHandle = nextSegment?.kind !== 'freeze' ? nextSegment?.transition?.duration ?? 0 : 0
+      const incomingVideoDuration = segmentOutputDuration(segment) + nextHandle
+      const hasRemainder = incomingVideoDuration > duration
+      const resetVideoTimestamps = 'setpts=PTS-STARTPTS,settb=AVTB'
+
       filters.push(
-        `${currentLabel}${nextLabel}xfade=transition=${segment.transition.effect}:` +
-        `duration=${seconds(segment.transition.duration)}:offset=${seconds(outputDuration)}${joinedLabel}`
+        `${currentLabel}split=2${prefixLabel}${outgoingLabel}`,
+        `${prefixLabel}trim=end=${seconds(outputDuration)},${resetVideoTimestamps}${trimmedPrefixLabel}`,
+        `${outgoingLabel}trim=start=${seconds(outputDuration)}:duration=${seconds(duration)},${resetVideoTimestamps},fps=${request.canvas.fps}${trimmedOutgoingLabel}`
       )
+      if (hasRemainder) {
+        filters.push(
+          `${nextLabel}split=2${incomingHeadLabel}${incomingRemainderLabel}`,
+          `${incomingHeadLabel}trim=duration=${seconds(duration)},${resetVideoTimestamps},fps=${request.canvas.fps}${trimmedIncomingHeadLabel}`,
+          `${incomingRemainderLabel}trim=start=${seconds(duration)},${resetVideoTimestamps}${trimmedIncomingRemainderLabel}`
+        )
+      } else {
+        filters.push(`${nextLabel}trim=duration=${seconds(duration)},${resetVideoTimestamps},fps=${request.canvas.fps}${trimmedIncomingHeadLabel}`)
+      }
+      filters.push(
+        `${trimmedOutgoingLabel}${trimmedIncomingHeadLabel}xfade=transition=${transition}:` +
+        `duration=${seconds(duration)}:offset=0${mixedLabel}`
+      )
+      const concatInputs = hasRemainder
+        ? `${trimmedPrefixLabel}${mixedLabel}${trimmedIncomingRemainderLabel}`
+        : `${trimmedPrefixLabel}${mixedLabel}`
+      filters.push(`${concatInputs}concat=n=${hasRemainder ? 3 : 2}:v=1:a=0${joinedLabel}`)
     } else {
       filters.push(`${currentLabel}${nextLabel}concat=n=2:v=1:a=0${joinedLabel}`)
     }
@@ -318,10 +348,11 @@ function addVisualFilters(filters: string[], inputs: PreparedInput[], request: E
 
 export async function exportVideo(request: ExportRequest, range?: PreviewRange): Promise<void> {
   if (request.segments.length === 0) throw new Error('The timeline is empty')
-  await mkdir(dirname(request.outputPath), { recursive: true })
+  const outputDirectory = dirname(request.outputPath)
+  await mkdir(outputDirectory, { recursive: true })
   await ensureDiskSpace(request)
-  const temporaryDirectory = await mkdtemp(join(tmpdir(), 'otc-export-'))
-  const temporaryOutput = join(dirname(request.outputPath), `.${randomUUID()}.otc.mp4`)
+  const temporaryDirectory = await mkdtemp(join(outputDirectory, '.otc-export-'))
+  const temporaryOutput = join(outputDirectory, `.${randomUUID()}.otc.mp4`)
   const duration = range ? range[1] - range[0] : timelineDuration(request.segments)
   const jobId = randomUUID()
 
@@ -364,26 +395,6 @@ async function prepareInputs(request: ExportRequest, directory: string, range?: 
   return { inputArgs, preparedInputs, graphRequest, seek }
 }
 
-function needsAudioValidation(overlay: Overlay): boolean {
-  return overlay.type === 'video' && overlay.audioEnabled && !overlay.hasAudio
-}
-
-export function loopsInput(overlay: Overlay): boolean {
-  return overlay.type === 'gif' || (overlay.type === 'video' && overlay.loop)
-}
-
-function stillInput(overlay: Overlay): boolean {
-  return overlay.type === 'image' || overlay.type === 'text'
-}
-
-async function overlayInputArgs(overlay: Overlay, directory: string): Promise<string[]> {
-  if (needsAudioValidation(overlay)) throw new Error(`Video clip has no audio stream: ${overlay.name}`)
-  const path = overlay.type === 'audio' ? overlay.path : await prepareVisualPath(overlay, directory)
-  const options: string[] = []
-  if (stillInput(overlay)) options.push('-loop', '1')
-  if (loopsInput(overlay)) options.push('-stream_loop', '-1')
-  return [...options, '-threads', '2', '-i', path]
-}
 
 function encoderGraph(encoder: Encoder, softwareGraph: string, videoLabel: string): string {
   return encoder.filterSuffix

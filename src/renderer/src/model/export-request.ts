@@ -53,6 +53,7 @@ export async function prepareExportRequest(session: EditSession, outputPath: str
     segments: session.segments,
     overlays,
     focusZooms: session.focusZooms,
+    shortFramePoints: session.shortFramePoints,
     videoTransitions: session.videoTransitions?.map(fitVideoRangeTransition),
     faceBlurs: session.faceBlurs
   }

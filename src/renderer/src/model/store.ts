@@ -23,13 +23,16 @@ import { timedRangesAfterRemoval } from './timed-ranges'
 import { insertReplay as insertReplayEdit, removeReplayAtPlayhead, replayEligibility } from './replay'
 import { removeFaceBlurById, replaceFaceBlurRange, updateFaceBlurById } from './face-blur'
 import { replaceVideoRangeTransition } from './video-range-transition'
+import { nudgeShortFrame, shortFramePointsAfterRemoval } from './short-frame'
+import { isShortCanvas } from '@shared/short-frame'
 import { chooseVideo } from './video-picker'
 import {
   mutation,
   normalizeOverlay,
   patchedOverlaySession,
   queueSessionWrite,
-  restoredEditorState
+  restoredEditorState,
+  retainEditorState
 } from './store-session'
 
 export const useEditorStore = create<EditorState>((set, get) => {
@@ -96,6 +99,8 @@ export const useEditorStore = create<EditorState>((set, get) => {
         window.otc.probe(path),
         window.otc.getPathUrl(path)
       ])
+      if (generation !== projectGeneration) return
+      await window.otc.clearFaceCache()
       if (generation !== projectGeneration) return
       const session = createSession(metadata, short)
       const source = primarySource(session)
@@ -208,6 +213,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
           playhead: Math.min(start, duration),
           marks: marksAfterRemoval(session.marks, start, end, duration),
           focusZooms: timedRangesAfterRemoval(session.focusZooms, start, end),
+          ...(session.shortFramePoints === undefined ? {} : { shortFramePoints: shortFramePointsAfterRemoval(session.shortFramePoints, start, end) }),
           ...(session.faceBlurs === undefined ? {} : { faceBlurs: timedRangesAfterRemoval(session.faceBlurs, start, end) }),
           ...(session.videoTransitions === undefined ? {} : { videoTransitions: timedRangesAfterRemoval(session.videoTransitions, start, end) }),
           selectedOverlayId: result.overlays.some((item) => item.id === session.selectedOverlayId)
@@ -231,6 +237,15 @@ export const useEditorStore = create<EditorState>((set, get) => {
       const range = deletionRange(state.session)
       if (!range) return state
       return mutation(state, (session) => addFocusZoom(session, range[0], range[1], zoom, focusX, focusY))
+    })
+  },
+  nudgeShortFrame(direction) {
+    set((state) => {
+      if (!state.session || !isShortCanvas(state.session.canvas)) return state
+      const next = nudgeShortFrame(state.session, direction)
+      return next
+        ? mutation(state, () => next)
+        : { error: 'Short frame keyframe limit reached.' }
     })
   },
   removeFocusZoom() {
@@ -477,14 +492,6 @@ export const useEditorStore = create<EditorState>((set, get) => {
   clearError() { set({ error: null }) }
   }
 })
-// Development hot reload must retain unsaved edits, not recreate an empty store
-// and reload the last disk snapshot. Keep data only; actions use the new code.
 if (import.meta.hot?.data) {
-  const hotData = import.meta.hot.data as { editorState?: Partial<EditorState> }
-  const retained = hotData.editorState
-  if (retained) useEditorStore.setState(retained)
-  import.meta.hot.dispose((data: { editorState?: Partial<EditorState> }) => {
-    const { initialized, session, history, future, gesture, assets, gpu, job, busy, error } = useEditorStore.getState()
-    data.editorState = { initialized, session, history, future, gesture, assets, gpu, job, busy, error }
-  })
+  retainEditorState(useEditorStore, import.meta.hot)
 }

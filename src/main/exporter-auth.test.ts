@@ -78,6 +78,16 @@ beforeEach(() => {
 })
 
 describe('restricted GPU export authorization', () => {
+  it('creates temporary export files on the destination filesystem', async () => {
+    fsMocks.mkdtemp.mockResolvedValue('/exports/.otc-export-test')
+
+    await exportVideo({ ...request, outputPath: '/exports/output.mp4' })
+
+    expect(fsMocks.mkdir).toHaveBeenCalledWith('/exports', { recursive: true })
+    expect(fsMocks.mkdtemp).toHaveBeenCalledWith('/exports/.otc-export-')
+    expect(fsMocks.rm).toHaveBeenCalledWith('/exports/.otc-export-test', { recursive: true, force: true })
+  })
+
   it('uses the privileged export entrypoint before probing encoders', async () => {
     workerMocks.restrictedIntelRenderNode.mockResolvedValue('/dev/dri/renderD130')
 

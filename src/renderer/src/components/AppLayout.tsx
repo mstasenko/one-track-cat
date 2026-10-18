@@ -243,6 +243,7 @@ export function EditorWorkspace({
           zoom={zoom}
           onZoom={onZoom}
           onSeek={seek}
+          onNudgeFrame={(direction) => { onPlayingChange(false); store.nudgeShortFrame(direction) }}
           onSelectOverlay={selectOverlay}
           selectedFaceBlurId={selectedFaceBlurId}
           onSelectFaceBlur={onSelectFaceBlur}

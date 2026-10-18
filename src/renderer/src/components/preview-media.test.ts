@@ -5,6 +5,7 @@ import {
   overlayNeedsResync,
   overlaySyncTolerances,
   previewMediaVolume,
+  incomingTransitionMedia,
   secondaryPreviewMedia,
   type SecondaryPreviewMedia
 } from './preview-media'
@@ -66,9 +67,9 @@ const mediaCases: MediaCase[] = [
   ['next freeze clip', session([current, nextFreeze]), at([current, nextFreeze], 0, 4), false, 4, { path: '/b.mp4', time: 6, rate: 0 }],
   ['next clip from the same source', session([current, sameSourceNext], [source('a', '/a.mp4')]), at([current, sameSourceNext], 0, 4), false, 4, { path: '/a.mp4', time: 5, rate: 0 }],
   ['missing next source', session([current, missingSourceNext]), at([current, missingSourceNext], 0, 4), false, 4, { path: '/a.mp4', time: 4, rate: 0 }],
-  ['transition warmup at normal speed', session([current, transitionNext]), at([current, transitionNext], 0, 4), false, 4, { path: '/a.mp4', time: 4, rate: 1 }],
-  ['transition mid-clip at normal speed', session([current, transitionNext]), at([current, transitionNext], 0, 2), false, 2, { path: '/a.mp4', time: 2, rate: 0 }],
-  ['transition warmup at 2x speed', session([fastCurrent, transitionNext]), at([fastCurrent, transitionNext], 0, 6), false, 6, { path: '/a.mp4', time: 6, rate: 2 }],
+  ['transition warmup at normal speed', session([current, transitionNext]), at([current, transitionNext], 0, 4), false, 4, { path: '/a.mp4', time: 5, rate: 0 }],
+  ['transition mid-clip at normal speed', session([current, transitionNext]), at([current, transitionNext], 0, 2), false, 2, { path: '/a.mp4', time: 5, rate: 0 }],
+  ['transition warmup at 2x speed', session([fastCurrent, transitionNext]), at([fastCurrent, transitionNext], 0, 6), false, 6, { path: '/a.mp4', time: 8, rate: 0 }],
   ['current freeze clip', session([freeze('current-freeze', 'a', 2, 2)]), at([freeze('current-freeze', 'a', 2, 2)], 0, 2), false, 2, { path: '/a.mp4', time: 2, rate: 0 }],
   ['waiting for the current frame', session(plainSegments), at(plainSegments, 0, 4), true, 1.25, { path: '/a.mp4', time: 1.25, rate: 1 }],
   ['waiting for a freeze frame', session([freeze('waiting-freeze', 'a', 2, 2)]), at([freeze('waiting-freeze', 'a', 2, 2)], 0, 1.25), true, 1.25, { path: '/a.mp4', time: 1.25, rate: 0 }],
@@ -76,6 +77,15 @@ const mediaCases: MediaCase[] = [
 ]
 
 describe('preview media', () => {
+  it('preloads the exact incoming edge throughout the preceding clip', () => {
+    const currentSession = session([current, transitionNext])
+    currentSession.playhead = 2.9
+    expect(incomingTransitionMedia(currentSession, at(currentSession.segments, 0, 2.9))).toEqual({ path: '/b.mp4', time: 10, rate: 0 })
+
+    currentSession.playhead = 3
+    expect(incomingTransitionMedia(currentSession, at(currentSession.segments, 0, 3))).toEqual({ path: '/b.mp4', time: 10, rate: 0 })
+  })
+
   it('keeps browser volume in its valid range while export gain may exceed one', () => {
     expect(previewMediaVolume(2)).toBe(1)
     expect(previewMediaVolume(0.5)).toBe(0.5)

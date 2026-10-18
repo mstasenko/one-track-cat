@@ -84,8 +84,11 @@ std::vector<Detection> decodeDetections(
                   (centerY - boxHeight * 0.5F) * static_cast<float>(height),
                   (centerX + boxWidth * 0.5F) * static_cast<float>(width),
                   (centerY + boxHeight * 0.5F) * static_cast<float>(height)};
-    const Box clipped = clipBox(box, width, height);
-    if (validBox(clipped)) detections.push_back({clipped, score});
+    // A crop edge is artificial.  Use its intersection only to reject boxes
+    // with no meaningful region overlap, but retain the decoded box through
+    // local NMS so a face crossing overlapping crop edges is not fragmented.
+    const Box regionIntersection = clipBox(box, width, height);
+    if (validBox(regionIntersection)) detections.push_back({box, score});
   }
   return detections;
 }
@@ -226,10 +229,10 @@ std::string openVinoDeviceHardwareLabel(const std::string& device) {
 RetinaFaceDetector::RetinaFaceDetector(const std::filesystem::path& modelXml, const std::string& device)
     : impl_(std::make_shared<Impl>(modelXml, device)) {}
 
-std::vector<Detection> RetinaFaceDetector::detect(const std::vector<std::uint8_t>& rgb,
-                                                  int width,
-                                                  int height,
-                                                  float scoreThreshold) {
+std::vector<Detection> RetinaFaceDetector::detectUnclipped(const std::vector<std::uint8_t>& rgb,
+                                                           int width,
+                                                           int height,
+                                                           float scoreThreshold) {
   if (width <= 0 || height <= 0 || rgb.size() != static_cast<std::size_t>(width) *
                                                      static_cast<std::size_t>(height) * 3U) {
     throw std::runtime_error("invalid frame dimensions");
@@ -244,6 +247,15 @@ std::vector<Detection> RetinaFaceDetector::detect(const std::vector<std::uint8_t
   std::vector<Detection> detections =
       decodeDetections(bboxTensor, scoreTensor, impl_->anchors, width, height, scoreThreshold);
   return nonMaxSuppression(std::move(detections), 0.4F, 256U);
+}
+
+std::vector<Detection> RetinaFaceDetector::detect(const std::vector<std::uint8_t>& rgb,
+                                                  int width,
+                                                  int height,
+                                                  float scoreThreshold) {
+  std::vector<Detection> detections = detectUnclipped(rgb, width, height, scoreThreshold);
+  for (Detection& detection : detections) detection.box = clipBox(detection.box, width, height);
+  return detections;
 }
 
 std::vector<Detection> RetinaFaceDetector::detectRegions(const std::vector<std::uint8_t>& rgb,
@@ -272,6 +284,8 @@ std::vector<Detection> RetinaFaceDetector::detectRegions(const std::vector<std::
   };
   const auto appendRegion = [&](const Region& region, const std::vector<Detection>& local) {
     for (Detection detection : local) {
+      // Local boxes may extend outside an artificial crop.  Translate first,
+      // then clip once to the actual frame before global NMS.
       detection.box.x1 += static_cast<float>(region.x);
       detection.box.x2 += static_cast<float>(region.x);
       detection.box.y1 += static_cast<float>(region.y);
@@ -285,10 +299,10 @@ std::vector<Detection> RetinaFaceDetector::detectRegions(const std::vector<std::
     for (const Region& region : regions) {
       std::vector<Detection> local;
       if (fullFrame(region)) {
-        local = detect(rgb, width, height, scoreThreshold);
+        local = detectUnclipped(rgb, width, height, scoreThreshold);
       } else {
         copyRegion(rgb, width, region, tile);
-        local = detect(tile, region.width, region.height, scoreThreshold);
+        local = detectUnclipped(tile, region.width, region.height, scoreThreshold);
       }
       appendRegion(region, local);
     }

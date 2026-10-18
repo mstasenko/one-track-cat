@@ -83,11 +83,15 @@ describe('face blur panel', () => {
     const onApply = vi.fn<(settings: FaceBlurSettings) => void>()
     const app = renderPanel(undefined, [], onApply)
     await vi.waitFor(() => expect(button(app, 'Apply face blur').disabled).toBe(false))
-    expect((labeledInput(app, 'Sensitivity') as HTMLInputElement).value).toBe('0.7')
+    expect((labeledInput(app, 'Sensitivity') as HTMLInputElement).value).toBe('0.01')
     expect((labeledInput(app, 'Small faces (slower)') as HTMLInputElement).checked).toBe(true)
     expect((labeledInput(app, 'Hold missed faces seconds') as HTMLInputElement).value).toBe('0.3')
     expect((labeledInput(app, 'Strength') as HTMLInputElement).value).toBe('0.7')
     expect((labeledInput(app, 'Style') as HTMLSelectElement).value).toBe('pixelate')
+
+    act(() => { button(app, 'Apply face blur').click() })
+    expect(onApply).toHaveBeenCalledWith({ sensitivity: 0.01, detail: 'small', holdSeconds: 0.3, strength: 0.7, style: 'pixelate' })
+    onApply.mockClear()
 
     act(() => {
       const style = labeledInput(app, 'Style') as HTMLSelectElement
@@ -95,13 +99,54 @@ describe('face blur panel', () => {
       style.dispatchEvent(new Event('change', { bubbles: true }))
       const hold = labeledInput(app, 'Hold missed faces seconds') as HTMLInputElement
       const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.bind(hold)
-      setter?.('0.5')
+      setter?.('2')
       hold.dispatchEvent(new Event('input', { bubbles: true }))
       hold.dispatchEvent(new Event('change', { bubbles: true }))
+      hold.dispatchEvent(new Event('blur', { bubbles: true }))
+      hold.dispatchEvent(new Event('focusout', { bubbles: true }))
     })
+    expect((labeledInput(app, 'Hold missed faces seconds') as HTMLInputElement).value).toBe('2')
     act(() => { button(app, 'Apply face blur').click() })
-    expect(onApply).toHaveBeenCalledWith({ sensitivity: 0.7, detail: 'small', holdSeconds: 0.5, strength: 0.7, style: 'mask' })
+    expect(onApply).toHaveBeenCalledWith({ sensitivity: 0.01, detail: 'small', holdSeconds: 2, strength: 0.7, style: 'mask' })
     expect(app.querySelector('button:not([aria-label^="Remove face blur"])')?.textContent).not.toMatch(/Preview/)
+  })
+
+  it('shows and applies zero sensitivity from a selected effect', async () => {
+    const selected: FaceBlurEffect = {
+      id: 'zero-sensitivity', start: 1, duration: 2, sensitivity: 0, detail: 'small',
+      holdSeconds: 0.55, strength: 0.81, style: 'mask'
+    }
+    const onApply = vi.fn<(settings: FaceBlurSettings) => void>()
+    const app = renderPanel(undefined, [selected], onApply, vi.fn(), selected)
+    await vi.waitFor(() => expect(button(app, 'Apply face blur').disabled).toBe(false))
+    const sensitivity = labeledInput(app, 'Sensitivity') as HTMLInputElement
+    expect(sensitivity.value).toBe('0')
+    expect(sensitivity.closest('label')?.querySelector('output')?.textContent).toBe('0%')
+
+    act(() => { button(app, 'Apply face blur').click() })
+    expect(onApply).toHaveBeenCalledWith({ sensitivity: 0, detail: 'small', holdSeconds: 0.55, strength: 0.81, style: 'mask' })
+  })
+
+  it('passes zero sensitivity when the default slider is moved to zero', async () => {
+    const onApply = vi.fn<(settings: FaceBlurSettings) => void>()
+    const app = renderPanel(undefined, [], onApply)
+    await vi.waitFor(() => expect(button(app, 'Apply face blur').disabled).toBe(false))
+    const sensitivity = labeledInput(app, 'Sensitivity') as HTMLInputElement
+    expect(sensitivity.value).toBe('0.01')
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.bind(sensitivity)
+    act(() => {
+      setter?.('0.7')
+      sensitivity.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    expect(sensitivity.value).toBe('0.7')
+    act(() => {
+      setter?.('0')
+      sensitivity.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    expect(sensitivity.value).toBe('0')
+
+    act(() => { button(app, 'Apply face blur').click() })
+    expect(onApply).toHaveBeenCalledWith({ sensitivity: 0, detail: 'small', holdSeconds: 0.3, strength: 0.7, style: 'pixelate' })
   })
 
   it('keeps the apply scope simple without duplicating timeline effects', async () => {
@@ -154,19 +199,22 @@ describe('face blur panel', () => {
     session.playhead = 8
     const selected: FaceBlurEffect = {
       id: 'selected-face-blur', start: 1.25, duration: 2.5, sensitivity: 0.42, detail: 'small',
-      holdSeconds: 0.55, strength: 0.81, style: 'mask'
+      holdSeconds: 2, strength: 0.81, style: 'mask'
     }
+    const onApply = vi.fn<(settings: FaceBlurSettings) => void>()
     const onRemove = vi.fn<(id: string) => void>()
-    const app = renderPanel(session, [selected], vi.fn(), onRemove, selected)
+    const app = renderPanel(session, [selected], onApply, onRemove, selected)
     await vi.waitFor(() => expect(button(app, 'Apply face blur').disabled).toBe(false))
     expect(app.textContent).toContain('Apply to selected range.')
     expect(app.textContent).not.toMatch(/00:01.25 – 00:03.75/)
     expect(app.textContent).not.toMatch(/Selected face blur|Face blur at the playhead/)
     expect((labeledInput(app, 'Sensitivity') as HTMLInputElement).value).toBe('0.42')
     expect((labeledInput(app, 'Small faces (slower)') as HTMLInputElement).checked).toBe(true)
-    expect((labeledInput(app, 'Hold missed faces seconds') as HTMLInputElement).value).toBe('0.55')
+    expect((labeledInput(app, 'Hold missed faces seconds') as HTMLInputElement).value).toBe('2')
     expect((labeledInput(app, 'Strength') as HTMLInputElement).value).toBe('0.81')
     expect((labeledInput(app, 'Style') as HTMLSelectElement).value).toBe('mask')
+    act(() => { button(app, 'Apply face blur').click() })
+    expect(onApply).toHaveBeenCalledWith({ sensitivity: 0.42, detail: 'small', holdSeconds: 2, strength: 0.81, style: 'mask' })
     const remove = app.querySelector('button[aria-label^="Remove face blur"]')
     if (!(remove instanceof HTMLButtonElement)) throw new Error('remove button missing')
     act(() => { remove.click() })

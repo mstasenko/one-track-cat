@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
-import type { ExportRequest } from '../types'
+import type { ExportRequest, VideoTransition } from '../types'
 import { timelineDuration } from '../segment-time'
 
 vi.mock('electron', () => ({ app: { isPackaged: false }, BrowserWindow: { getAllWindows: () => [] } }))
@@ -59,7 +59,7 @@ function metadata(path: string, name: string) {
   return { path, name, size: 1, modifiedAt: 1, duration, width, height, fps, videoCodec: 'ffv1', hasAudio: false }
 }
 
-function request(firstStart = 0, firstEnd = duration, secondStart = 0, secondEnd = duration): ExportRequest {
+function request(firstStart = 0, firstEnd = duration, secondStart = 0, secondEnd = duration, transition?: VideoTransition): ExportRequest {
   return {
     canvas: { width, height, fps, fit: 'contain' },
     sources: [
@@ -68,7 +68,7 @@ function request(firstStart = 0, firstEnd = duration, secondStart = 0, secondEnd
     ],
     segments: [
       { id: 'first-segment', sourceId: 'first', sourceStart: firstStart, sourceEnd: firstEnd },
-      { id: 'second-segment', sourceId: 'second', sourceStart: secondStart, sourceEnd: secondEnd }
+      { id: 'second-segment', sourceId: 'second', sourceStart: secondStart, sourceEnd: secondEnd, ...(transition ? { transition } : {}) }
     ],
     overlays: [],
     outputPath: join(directory, 'unused.mp4')
@@ -138,5 +138,18 @@ describe('CPU real video clip boundaries', () => {
     const rendered = renderFrames(request(0.2, 0.7, 0.3, 0.8))
     expect(rendered).toHaveLength(sourceFrames)
     expect(rendered).toEqual([...first.slice(12, 42), ...second.slice(18, 48)])
+  })
+
+  it('blends only the transition handles while preserving pixel order and duration', () => {
+    const first = sourceMarkers(firstPath)
+    const second = sourceMarkers(secondPath)
+    const rendered = renderFrames(request(0, duration, 0, duration, { effect: 'fade', duration: 0.25 }))
+
+    expect(rendered).toHaveLength(sourceFrames * 2)
+    expect(rendered.slice(0, sourceFrames)).toEqual(first)
+    expect(rendered[60]).toBe(first[sourceFrames - 1])
+    expect(rendered[67]).toBeGreaterThan(rendered[60] ?? 0)
+    expect(rendered[67]).toBeLessThan(second[0] ?? 255)
+    expect(rendered.slice(sourceFrames + 15)).toEqual(second.slice(15))
   })
 })

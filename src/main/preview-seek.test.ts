@@ -56,6 +56,7 @@ describe('selected-preview input seeking', () => {
     }
     expect(previewSeekPlan(request({ overlays: [overlay] }), selectedRange)).toBeUndefined()
     expect(previewSeekPlan(request({ focusZooms: [{ id: 'zoom', start: 0, duration: 1, zoom: 2, focusX: 0.5, focusY: 0.5 }] }), selectedRange)).toBeUndefined()
+    expect(previewSeekPlan(request({ shortFramePoints: [{ id: 'point', time: 0, position: 0 }] }), selectedRange)).toBeUndefined()
     expect(previewSeekPlan(request({
       videoTransitions: [{ id: 'transition', start: 0, duration: 1, into: { effect: 'fade', duration: 0.5 } }]
     }), selectedRange)).toBeUndefined()
@@ -82,6 +83,11 @@ describe('selected-preview input seeking', () => {
     }
     const project = request({ segments: [segment, { ...segment, id: 'second' }], overlays: [overlay] })
     expect(previewSeekRequest(project, selectedRange)).toBe(project)
+    const framing = request({
+      segments: [segment, { ...segment, id: 'second' }],
+      shortFramePoints: [{ id: 'point', time: 6, position: 1 }]
+    })
+    expect(previewSeekRequest(framing, selectedRange)).toBe(framing)
   })
 
   it('seeks video while retaining a full-duration original audio input', () => {

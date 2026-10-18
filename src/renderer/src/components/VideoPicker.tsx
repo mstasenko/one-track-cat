@@ -40,6 +40,7 @@ export function VideoPicker(): React.JSX.Element {
   const hoveredPathRef = useRef<string | null>(null)
   const focusedPathRef = useRef<string | null>(null)
   const [directory, setDirectory] = useState<VideoDirectory | null>(null)
+  const [enteredPath, setEnteredPath] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [previewingPath, setPreviewingPath] = useState<string | null>(null)
@@ -136,6 +137,7 @@ export function VideoPicker(): React.JSX.Element {
       const result = await window.otc.listVideoDirectory(requested)
       if (request !== directoryRequestRef.current) return
       setDirectory(result)
+      setEnteredPath(result.path)
     } catch (cause) {
       if (request === directoryRequestRef.current) {
         setError(`Could not open this folder. ${errorMessage(cause).slice(0, 320)}`)
@@ -189,6 +191,31 @@ export function VideoPicker(): React.JSX.Element {
     }
   }, [finish, stopPreview])
 
+  const openEnteredPath = useCallback(async (): Promise<void> => {
+    const path = enteredPath.trim()
+    if (!path) return
+    const request = ++selectionRequestRef.current
+    directoryRequestRef.current += 1
+    stopPreview()
+    setFallbackBusy(true)
+    setError(null)
+    try {
+      const result = await window.otc.openVideoPath(path)
+      if (!openRef.current || request !== selectionRequestRef.current) return
+      if (typeof result === 'string') finish(result)
+      else {
+        setDirectory(result)
+        setEnteredPath(result.path)
+      }
+    } catch (cause) {
+      if (openRef.current && request === selectionRequestRef.current) {
+        setError(`Could not open this path. ${errorMessage(cause).slice(0, 320)}`)
+      }
+    } finally {
+      if (request === selectionRequestRef.current) setFallbackBusy(false)
+    }
+  }, [enteredPath, finish, stopPreview])
+
   useEffect(() => {
     const dialog = dialogRef.current
     if (!dialog) return
@@ -205,6 +232,7 @@ export function VideoPicker(): React.JSX.Element {
     invalidateRequests()
     stopPreview()
     setDirectory(null)
+    setEnteredPath('')
     setLoading(false)
     setBusyPath(null)
     setFallbackBusy(false)
@@ -261,7 +289,7 @@ export function VideoPicker(): React.JSX.Element {
     >
       <section className="video-picker-panel">
         <h2 id="video-picker-title">Open a video</h2>
-        <div className="video-picker-location">
+        <form className="video-picker-location" onSubmit={(event) => { event.preventDefault(); void openEnteredPath() }}>
           <button
             type="button"
             aria-label="Go to parent folder"
@@ -270,8 +298,18 @@ export function VideoPicker(): React.JSX.Element {
           >
             ↑ Up
           </button>
-          <code title={directory?.path}>{directory?.path ?? (loading ? 'Loading…' : 'No folder selected')}</code>
-        </div>
+          <input
+            aria-label="Video or folder path"
+            value={enteredPath}
+            placeholder={loading ? 'Loading…' : '/path/to/video-or-folder'}
+            spellCheck={false}
+            disabled={loading || fallbackBusy}
+            onChange={(event) => setEnteredPath(event.currentTarget.value)}
+          />
+          <button type="submit" disabled={loading || fallbackBusy || !enteredPath.trim()}>
+            {fallbackBusy ? 'Opening…' : 'Open'}
+          </button>
+        </form>
         {error && <p className="video-picker-error" role="alert">{error}</p>}
         <div className="video-picker-browser" aria-busy={loading}>
           {loading && <p className="video-picker-status">Loading folder…</p>}
@@ -281,6 +319,7 @@ export function VideoPicker(): React.JSX.Element {
                 type="button"
                 className="video-picker-entry video-picker-directory"
                 key={entry.path}
+                disabled={fallbackBusy}
                 onClick={() => void loadDirectory(entry.path)}
                 title={entry.path}
               >
@@ -292,6 +331,7 @@ export function VideoPicker(): React.JSX.Element {
                 key={entry.path}
                 data-video-path={entry.path}
                 aria-busy={busyPath === entry.path}
+                disabled={fallbackBusy}
                 onClick={() => void selectVideo(entry.path)}
                 onMouseEnter={() => handleEntryMouseEnter(entry)}
                 onMouseLeave={() => handleEntryMouseLeave(entry)}

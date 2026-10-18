@@ -1,7 +1,10 @@
 import { basename } from 'node:path'
+import { record, text, identifier, number, boolean, oneOf, validateUniqueIds, type UnknownRecord } from './validation-values'
+import { parseShortFraming } from './short-frame-validation'
 import {
   audioFadeDurations,
   faceBlurMaxEffects,
+  faceBlurMaxHoldSeconds,
   focusZoomAmounts,
   gameAudioLevels,
   mediaAnimationPresets,
@@ -28,47 +31,6 @@ import type {
 import { timelineDuration } from '../segment-time'
 import { fitVideoRangeTransition } from '../video-range-transition'
 
-type UnknownRecord = Record<string, unknown>
-
-function record(value: unknown, label: string): UnknownRecord {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`${label} must be an object`)
-  return value as UnknownRecord
-}
-
-function text(value: unknown, label: string, maximumLength = 4096): string {
-  if (typeof value !== 'string' || !value || value.length > maximumLength) {
-    throw new Error(`${label} must be a non-empty string`)
-  }
-  return value
-}
-
-function identifier(value: unknown, label: string): string {
-  const id = text(value, label, 128)
-  if (!/^[A-Za-z0-9._-]+$/.test(id)) throw new Error(`${label} contains unsafe characters`)
-  return id
-}
-
-function number(value: unknown, label: string, minimum = 0, maximum = 1e9): number {
-  if (typeof value !== 'number' || !Number.isFinite(value) || value < minimum || value > maximum) {
-    throw new Error(`${label} is outside its allowed range`)
-  }
-  return value
-}
-
-function boolean(value: unknown, label: string): boolean {
-  if (typeof value !== 'boolean') throw new Error(`${label} must be true or false`)
-  return value
-}
-
-function oneOf<T extends string>(value: unknown, values: readonly T[], label: string): T {
-  if (typeof value !== 'string' || !values.includes(value as T)) throw new Error(`${label} is not supported`)
-  return value as T
-}
-
-function validateUniqueIds(items: readonly { id: string }[], label: string): void {
-  const ids = new Set(items.map((item) => item.id))
-  if (ids.size !== items.length) throw new Error(`${label} IDs must be unique`)
-}
 
 function optionalNumberPreset(value: unknown, values: readonly number[], label: string): void {
   if (value !== undefined && (typeof value !== 'number' || !values.includes(value))) {
@@ -118,7 +80,10 @@ function parseProjectCanvas(value: unknown): ProjectCanvas {
     width: number(input.width, 'Canvas width', 2, 100_000),
     height: number(input.height, 'Canvas height', 2, 100_000),
     fps: number(input.fps, 'Canvas frame rate', 1, 1000),
-    fit: oneOf(input.fit, ['contain', 'cover'] as const, 'Canvas fit')
+    fit: oneOf(input.fit, ['contain', 'cover'] as const, 'Canvas fit'),
+    ...(input.shortFramePosition === undefined ? {} : {
+      shortFramePosition: number(input.shortFramePosition, 'Short frame position', 0, 1)
+    })
   }
 }
 
@@ -309,14 +274,17 @@ function parseFaceBlurs(value: unknown, duration: number): FaceBlurEffect[] {
       duration: effectDuration,
       sensitivity: number(input.sensitivity, 'Face blur sensitivity', 0, 1),
       detail: oneOf(input.detail, ['standard', 'small'] as const, 'Face blur detail'),
-      holdSeconds: number(input.holdSeconds, 'Face blur hold seconds', 0, 1),
+      holdSeconds: number(input.holdSeconds, 'Face blur hold seconds', 0, faceBlurMaxHoldSeconds),
       strength: number(input.strength, 'Face blur strength', 0, 1),
       style: oneOf(input.style, ['pixelate', 'blur', 'mask'] as const, 'Face blur style')
     }
   })
   validateUniqueIds(output, 'Face blur')
   const sorted = [...output].sort((left, right) => left.start - right.start)
-  if (sorted.some((item, index) => index > 0 && item.start < (sorted[index - 1]?.start ?? 0) + (sorted[index - 1]?.duration ?? 0) - 0.0001)) {
+  if (sorted.some((item, index) => {
+    const previous = sorted[index - 1]
+    return previous && item.start < previous.start + previous.duration - 0.0001
+  })) {
     throw new Error('Face blur effects cannot overlap')
   }
   return sorted
@@ -348,13 +316,22 @@ function validateOverlay(value: unknown, timelineDuration: number, canvas: Proje
 
 export function parseExportRequest(value: unknown): ExportRequest {
   const input = record(value, 'Export request')
-  const canvas = parseProjectCanvas(input.canvas)
+  const parsedCanvas = parseProjectCanvas(input.canvas)
+  const legacyInitial = parsedCanvas.shortFramePosition
+  const canvas = { ...parsedCanvas }
+  delete canvas.shortFramePosition
   const sources = parseSources(input.sources)
   const sourcesById = new Map(sources.map((item) => [item.id, item.metadata]))
   const segments = parseSegments(input.segments, sourcesById)
   const duration = timelineDuration(segments)
   const overlays = parseOverlays(input.overlays, duration, canvas)
   const focusZooms = parseFocusZooms(input.focusZooms, duration)
+  const shortFramePoints = parseShortFraming(
+    input,
+    duration,
+    parsedCanvas,
+    legacyInitial
+  )
   const faceBlurs = parseFaceBlurs(input.faceBlurs, duration)
   const videoTransitions = parseVideoRangeTransitions(input.videoTransitions, duration)
   return {
@@ -364,10 +341,12 @@ export function parseExportRequest(value: unknown): ExportRequest {
     segments,
     overlays,
     ...(input.focusZooms === undefined ? {} : { focusZooms }),
+    ...(shortFramePoints === undefined ? {} : { shortFramePoints }),
     ...(input.faceBlurs === undefined ? {} : { faceBlurs }),
     ...(input.videoTransitions === undefined ? {} : { videoTransitions })
   }
 }
+
 
 function parseVideoRangeTransitions(value: unknown, timelineDuration: number): VideoRangeTransition[] {
   if (value === undefined) return []
@@ -391,7 +370,15 @@ function parseVideoRangeTransitions(value: unknown, timelineDuration: number): V
     return fitVideoRangeTransition({ id: identifier(input.id, 'Video transition ID'), start, duration, ...(into ? { into } : {}), ...(out ? { out } : {}) })
   })
   validateUniqueIds(output, 'Video transition')
-  return output
+  // Preview selects one active range; export must not silently stack overlaps.
+  const sorted = [...output].sort((left, right) => left.start - right.start)
+  if (sorted.some((item, index) => {
+    const previous = sorted[index - 1]
+    return previous && item.start < previous.start + previous.duration - 0.0001
+  })) {
+    throw new Error('Video transitions cannot overlap')
+  }
+  return sorted
 }
 
 function parseFocusZooms(value: unknown, duration: number): FocusZoomEffect[] {
@@ -467,6 +454,7 @@ function parseSavedSessionSnapshot(value: unknown): SavedSessionSnapshot {
     playhead: number(input.playhead, 'Playhead', 0, duration),
     marks,
     ...(input.focusZooms === undefined ? {} : { focusZooms: timeline.focusZooms ?? [] }),
+    ...(timeline.shortFramePoints === undefined ? {} : { shortFramePoints: timeline.shortFramePoints }),
     ...(input.faceBlurs === undefined ? {} : { faceBlurs: faceBlurs ?? [] }),
     ...(input.videoTransitions === undefined ? {} : { videoTransitions: videoTransitions ?? [] })
   }

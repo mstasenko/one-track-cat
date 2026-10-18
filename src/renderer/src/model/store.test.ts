@@ -1,54 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { otcApi, MediaMetadata, SourceSegment, VideoSegment } from '@shared/types'
+import type { otcApi, MediaMetadata } from '@shared/types'
+import { api, metadata, video } from '../../../../tests/editor-store-fixtures'
 import { useEditorStore } from './store'
 import { savedSession } from './store-session'
 import { createSession } from './timeline'
-
 vi.mock('./video-picker', () => ({ chooseVideo: () => window.otc.openVideo() }))
 
-const metadata: MediaMetadata = {
-  path: '/source.mp4', name: 'source.mp4', size: 100, modifiedAt: 1, duration: 10,
-  width: 1280, height: 720, fps: 30, videoCodec: 'h264',
-  hasAudio: true
-}
-
-function video(segment: SourceSegment | undefined): VideoSegment {
-  if (!segment || segment.kind === 'freeze') throw new Error('video segment missing')
-  return segment
-}
-
-function api(): otcApi {
-  return {
-    openVideo: vi.fn().mockResolvedValue('/source.mp4'),
-    listVideoDirectory: vi.fn().mockResolvedValue({ path: '/videos', parent: null, entries: [], truncated: false }),
-    authorizeVideo: vi.fn().mockResolvedValue('/source.mp4'),
-    searchTemplates: vi.fn().mockResolvedValue([]),
-    importTemplate: vi.fn().mockResolvedValue({ type: 'image', name: 'template.png', path: '/template.png' }),
-    openTemplatePage: vi.fn().mockResolvedValue(undefined),
-    openMedia: vi.fn().mockResolvedValue({ path: '/effect.ogg', type: 'audio', name: 'Effect' }),
-    probe: vi.fn().mockResolvedValue(metadata),
-    probeAsset: vi.fn().mockResolvedValue({ duration: 2, hasAudio: true }),
-    waveform: vi.fn().mockResolvedValue([0.1, 0.8]),
-    scanAssets: vi.fn().mockResolvedValue([]),
-    chooseExportPath: vi.fn().mockResolvedValue('/output.mp4'),
-    exportVideo: vi.fn().mockResolvedValue(undefined),
-    facePackStatus: vi.fn().mockResolvedValue({ available: false, message: 'Face model pack unavailable' }),
-    previewFaces: vi.fn().mockResolvedValue('/preview.mp4'),
-    restoreFacePreview: vi.fn().mockResolvedValue([]),
-    loadSession: vi.fn().mockResolvedValue(null),
-    saveSession: vi.fn().mockResolvedValue(undefined),
-    resetSession: vi.fn().mockResolvedValue(undefined),
-    cancelJob: vi.fn().mockResolvedValue(true),
-    getGpuDiagnostics: vi.fn().mockResolvedValue({ hardwareAcceleration: true, videoDecode: 'enabled', gpuCompositing: 'enabled' }),
-    getPathUrl: vi.fn((path: string) => Promise.resolve(`media:${path}`)),
-    getSvgDataUrl: vi.fn((path: string) => Promise.resolve(`data:image/svg+xml,${path}`)),
-    getDroppedPath: vi.fn().mockResolvedValue('/drop.mp4'),
-    onOpenPath: vi.fn(() => () => undefined),
-    onResetProject: vi.fn(() => () => undefined),
-    onJobProgress: vi.fn(() => () => undefined),
-    onSaveRequest: vi.fn(() => () => undefined)
-  }
-}
 
 beforeEach(() => {
   Object.defineProperty(window, 'otc', { value: api(), configurable: true })
@@ -151,6 +108,50 @@ describe('editor store', () => {
     await useEditorStore.getState().resetProject()
     expect(window.otc.resetSession).toHaveBeenCalledOnce()
     expect(useEditorStore.getState().session).toBeNull()
+  })
+
+  it('adds an undoable keyframe only to a Short project and replaces the current playhead point', () => {
+    const ordinary = createSession(metadata)
+    ordinary.playhead = 4
+    useEditorStore.setState({ session: ordinary, history: [], future: [] })
+    useEditorStore.getState().nudgeShortFrame('right')
+    expect(useEditorStore.getState().session?.shortFramePoints).toEqual([])
+
+    const short = createSession(metadata, true)
+    short.playhead = 4
+    useEditorStore.setState({ session: short, history: [], future: [] })
+    useEditorStore.getState().nudgeShortFrame('left')
+    expect(useEditorStore.getState().session?.shortFramePoints).toEqual([
+      expect.objectContaining({ time: 4, position: 0.45 })
+    ])
+    const firstId = useEditorStore.getState().session?.shortFramePoints?.[0]?.id
+    useEditorStore.getState().nudgeShortFrame('right')
+    expect(useEditorStore.getState().session?.shortFramePoints).toEqual([
+      expect.objectContaining({ id: firstId, time: 4, position: 0.5 })
+    ])
+    useEditorStore.getState().undo()
+    expect(useEditorStore.getState().session?.shortFramePoints).toEqual([
+      expect.objectContaining({ time: 4, position: 0.45 })
+    ])
+  })
+
+  it('nudges Short framing in 5% steps, clamps at the edges, and does not history-no-op', () => {
+    useEditorStore.setState({ session: createSession(metadata, true), history: [], future: [] })
+    useEditorStore.getState().nudgeShortFrame('left')
+    expect(useEditorStore.getState().session?.shortFramePoints?.[0]?.position).toBe(0.45)
+    useEditorStore.getState().undo()
+    expect(useEditorStore.getState().session?.shortFramePoints).toEqual([])
+    for (let index = 0; index < 12; index++) useEditorStore.getState().nudgeShortFrame('right')
+    expect(useEditorStore.getState().session?.shortFramePoints?.[0]?.position).toBe(1)
+    const historyAtEdge = useEditorStore.getState().history.length
+    useEditorStore.getState().nudgeShortFrame('right')
+    expect(useEditorStore.getState().history).toHaveLength(historyAtEdge)
+    const session = useEditorStore.getState().session
+    if (!session) throw new Error('Short session missing')
+    expect(savedSession(session).shortFramePoints?.[0]?.position).toBe(1)
+    useEditorStore.setState({ session: createSession(metadata) })
+    useEditorStore.getState().nudgeShortFrame('left')
+    expect(useEditorStore.getState().session?.shortFramePoints).toEqual([])
   })
 
   it('reports rejected insert, media, and reset requests', async () => {

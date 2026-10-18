@@ -61,7 +61,7 @@ function verifyManifest(root) {
   let manifest; try { manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) } catch { fail('manifest.json is not valid JSON') }
   if (manifest.format !== 1 || manifest.model !== 'retinaface-resnet50' || manifest.modelZooName !== 'retinaface-resnet50-pytorch') fail('unsupported manifest model')
   if (manifest.protocol?.stdin !== 'RGB24' || manifest.protocol?.stdout !== 'RGB24' || manifest.protocol?.maxInFlightRequests !== 1) fail('raw-frame protocol is incorrect')
-  if (manifest.protocol?.maxHoldSeconds !== 1 || manifest.protocol?.maxEffectRows !== 100 || manifest.protocol?.maxFps !== 1000) fail('protocol bounds are incorrect')
+  if (manifest.protocol?.maxHoldSeconds !== 2 || manifest.protocol?.maxEffectRows !== 100 || manifest.protocol?.maxFps !== 1000) fail('protocol bounds are incorrect')
   if (manifest.runtime?.name !== 'OpenVINO Runtime' || manifest.runtime?.version !== '2025.3.0') fail('runtime pin is incorrect')
   if (!Array.isArray(manifest.runtime.libraries) || manifest.runtime.libraries.some((name) => /npu|auto|hetero|onnx|paddle|tensorflow/i.test(name))) fail('unsupported runtime plugin is bundled')
   if (!manifest.runtime.libraries.some((name) => name.startsWith('libopenvino_intel_cpu_plugin.so'))) fail('CPU runtime plugin is missing')
@@ -212,7 +212,7 @@ function runKnownFaceSmoke(root, fixtures) {
 function runCpuSmoke(root) {
   const temporary = mkdtempSync(join(tmpdir(), 'otc-face-verify-'))
   const effects = join(temporary, 'effects.tsv')
-  const rows = ['0\t1\t0.70\t0\t0.25\t0.70\t0', '1\t2\t0.70\t1\t0.50\t0.70\t1', '2\t3\t0.70\t0\t0.75\t0.70\t2']
+  const rows = ['0\t1\t0.70\t0\t0.25\t0.70\t0', '1\t2\t0.70\t1\t0.50\t0.70\t1', '2\t3\t0.70\t0\t2.00\t0.70\t2']
   writeFileSync(effects, `${rows.join('\n')}\n`)
   const width = 64; const height = 64; const frameBytes = width * height * 3; const input = Buffer.alloc(frameBytes * 3, 0x80)
   const result = spawnSync(join(root, 'otc-face-blur'), ['--model', join(root, 'model.xml'), '--width', String(width), '--height', String(height), '--fps', '1', '--effects', effects, '--device', 'CPU'], { input, env: { ...process.env, CUDA_VISIBLE_DEVICES: '', otc_CPU_ONLY: '1', LD_LIBRARY_PATH: join(root, 'lib') }, timeout: 120_000, maxBuffer: 2 * 1024 * 1024 })
@@ -222,7 +222,7 @@ function runCpuSmoke(root) {
     if (result.stdout.length !== input.length) fail(`CPU smoke returned ${result.stdout.length} bytes, expected ${input.length}`)
     if (!String(result.stderr).includes('device=CPU')) fail('CPU smoke did not report CPU execution')
   } finally { rmSync(temporary, { recursive: true, force: true }) }
-  return { frames: 3, styles: ['pixelate', 'blur', 'mask'], holdSeconds: [0.25, 0.5, 0.75] }
+  return { frames: 3, styles: ['pixelate', 'blur', 'mask'], holdSeconds: [0.25, 0.5, 2] }
 }
 
 const options = parseArgs(process.argv.slice(2))

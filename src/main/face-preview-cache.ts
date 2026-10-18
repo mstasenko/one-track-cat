@@ -177,7 +177,7 @@ async function writePersistedRecord(metadataPath: string, record: FacePreviewCac
   const temporaryPath = `${metadataPath}.${randomUUID()}.tmp`
   try {
     await mkdir(dirname(metadataPath), { recursive: true })
-    await writeFile(temporaryPath, JSON.stringify({ version: cacheVersion, ...record }), { flag: 'wx' })
+    await writeFile(temporaryPath, JSON.stringify({ version: cacheVersion, ...record }), { flag: 'wx', mode: 0o600 })
     await rename(temporaryPath, metadataPath)
   } finally {
     await rm(temporaryPath, { force: true }).catch(() => undefined)

@@ -1,6 +1,7 @@
 import type { EditSession, FreezeDuration, SourceSegment } from '@shared/types'
 import { isFreezeSegment, makeId, positionAtOutputTime, sourceForSegment, timeAfterOutputRemoval, timelineDuration, withTransition } from './timeline'
 import { timedRangesAfterInsertion, timedRangesAfterRemoval } from './timed-ranges'
+import { shortFramePointsAfterInsertion, shortFramePointsAfterRemoval } from './short-frame'
 
 const EPSILON = 0.0001
 
@@ -53,6 +54,9 @@ export function insertFreezeFrame(session: EditSession, outputTime: number, dura
     overlays: session.overlays.map((overlay) => ({ ...overlay, start: shiftPoint(overlay.start, outputTime, duration) })),
     marks: session.marks.map((mark) => shiftPoint(mark, outputTime, duration)),
     focusZooms,
+    ...(session.shortFramePoints === undefined ? {} : {
+      shortFramePoints: shortFramePointsAfterInsertion(session.shortFramePoints, outputTime, duration)
+    }),
     ...(faceBlurs === undefined ? {} : { faceBlurs }),
     ...(session.videoTransitions === undefined ? {} : {
       videoTransitions: timedRangesAfterInsertion(session.videoTransitions, outputTime, duration)
@@ -78,6 +82,9 @@ export function removeFreezeFrame(session: EditSession, segmentId: string): Edit
     overlays: session.overlays.map((overlay) => ({ ...overlay, start: timeAfterOutputRemoval(overlay.start, start, end) })),
     marks: session.marks.map((mark) => timeAfterOutputRemoval(mark, start, end)),
     focusZooms: timedRangesAfterRemoval(session.focusZooms, start, end),
+    ...(session.shortFramePoints === undefined ? {} : {
+      shortFramePoints: shortFramePointsAfterRemoval(session.shortFramePoints, start, end)
+    }),
     ...(faceBlurs === undefined ? {} : { faceBlurs }),
     ...(session.videoTransitions === undefined ? {} : {
       videoTransitions: timedRangesAfterRemoval(session.videoTransitions, start, end)

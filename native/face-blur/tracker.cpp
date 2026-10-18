@@ -13,6 +13,9 @@ float centerX(const Box& box) { return (box.x1 + box.x2) * 0.5F; }
 float centerY(const Box& box) { return (box.y1 + box.y2) * 0.5F; }
 
 Box moveBox(const Box& box, float dx, float dy, int width, int height) {
+  // A missed face near an edge must not lose its held mask to prediction alone.
+  dx = std::clamp(dx, -box.x1, static_cast<float>(width) - box.x2);
+  dy = std::clamp(dy, -box.y1, static_cast<float>(height) - box.y2);
   return clipBox({box.x1 + dx, box.y1 + dy, box.x2 + dx, box.y2 + dy}, width, height);
 }
 
@@ -44,7 +47,8 @@ std::vector<Box> FaceTracker::update(const std::vector<Detection>& detections,
                                      float holdSeconds,
                                      int width,
                                      int height) {
-  const double boundedHold = std::clamp(static_cast<double>(holdSeconds), 0.0, 1.0);
+  const double boundedHold = std::clamp(static_cast<double>(holdSeconds), 0.0,
+                                        static_cast<double>(maximumHoldSeconds));
   std::vector<bool> used(detections.size(), false);
   std::vector<Track> next;
   next.reserve(std::min(maximumTracks_, tracks_.size() + detections.size()));

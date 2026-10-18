@@ -2,6 +2,7 @@ import type { EditSession, FaceBlurEffect, SourceSegment } from '@shared/types'
 import { marksAfterRemoval, deletionRange, insertOutputGap, isFreezeSegment, makeId, normalizedMarks, positionAtOutputTime, removeOutputRange, segmentOutputDuration, segmentPlaybackRate, segmentSourceDuration, timelineDuration, withTransition, clamp } from './timeline'
 import { insertSegmentsAtOutputTime, segmentsForOutputRange } from './segment-ranges'
 import { timedRangesAfterInsertion, timedRangesAfterRemoval } from './timed-ranges'
+import { shortFramePointsAfterRemoval } from './short-frame'
 
 const EPSILON = 0.0001
 
@@ -199,6 +200,9 @@ export function removeReplayAtPlayhead(session: EditSession): EditSession {
     ...result,
     marks: marksAfterRemoval(session.marks, start, end, duration),
     focusZooms: timedRangesAfterRemoval(session.focusZooms, start, end),
+    ...(session.shortFramePoints === undefined ? {} : {
+      shortFramePoints: shortFramePointsAfterRemoval(session.shortFramePoints, start, end)
+    }),
     ...(session.videoTransitions === undefined ? {} : {
       videoTransitions: timedRangesAfterRemoval(session.videoTransitions, start, end)
     }),

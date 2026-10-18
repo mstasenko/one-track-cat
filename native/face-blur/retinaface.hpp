@@ -45,6 +45,11 @@ class RetinaFaceDetector {
                                        float scoreThreshold);
 
  private:
+  std::vector<Detection> detectUnclipped(const std::vector<std::uint8_t>& rgb,
+                                         int width,
+                                         int height,
+                                         float scoreThreshold);
+
   class Impl;
   std::shared_ptr<Impl> impl_;
 };

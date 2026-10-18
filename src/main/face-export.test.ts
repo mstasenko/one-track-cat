@@ -73,6 +73,8 @@ describe('face export composition pipeline', () => {
 
   it('serializes only validated numeric settings for the native worker', () => {
     expect(faceEffectRows([effect])).toBe('0.2\t0.7\t0.7\t1\t0.3\t0.7\t0\n')
+    expect(faceEffectRows([{ ...effect, sensitivity: 0 }])).toBe('0.2\t0.7\t0\t1\t0.3\t0.7\t0\n')
+    expect(faceEffectRows([{ ...effect, holdSeconds: 2 }])).toBe('0.2\t0.7\t0.7\t1\t2\t0.7\t0\n')
     expect(faceEffectRows([{ ...effect, detail: 'standard', style: 'mask' }])).toContain('\t0\t0.3\t0.7\t2\n')
   })
   it('streams composed frames and retains audio without an intermediate lossy video encode', async () => {

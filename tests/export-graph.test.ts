@@ -1,8 +1,8 @@
 import { beforeAll, describe, expect, it, vi } from 'vitest'
 import type { ExportRequest, Overlay } from '../src/types'
 
-vi.mock('../../src/main/binaries', () => ({ ffmpegPath: () => '/ffmpeg', ffprobePath: () => '/ffprobe' }))
-vi.mock('../../src/main/jobs', () => ({ jobs: { run: vi.fn() } }))
+vi.mock('../src/main/binaries', () => ({ ffmpegPath: () => '/ffmpeg', ffprobePath: () => '/ffprobe' }))
+vi.mock('../src/main/jobs', () => ({ jobs: { run: vi.fn() } }))
 
 let buildFilterGraph: typeof import('../src/main/exporter').buildFilterGraph
 let estimatedExportBytes: typeof import('../src/main/exporter').estimatedExportBytes
@@ -14,94 +14,6 @@ beforeAll(async () => {
 })
 
 describe('FFmpeg export graph', () => {
-  it.each(['image', 'video'] as const)('animates %s overlays on their local clock without changing default opacity', (type) => {
-    const common = { id: 'overlay', name: 'Overlay', start: 0.5, duration: 2, zIndex: 1, x: 0, y: 0, width: 1, height: 1, opacity: 0.6 }
-    const overlay: Extract<Overlay, { type: 'image' | 'video' }> = type === 'image'
-      ? { ...common, type, path: '/image.png' }
-      : { ...common, type, path: '/clip.mp4', sourceIn: 0.25, sourceDuration: 3, loop: false, hasAudio: true, audioEnabled: true, volume: 1 }
-    const source = { path: '/base.mp4', name: 'base.mp4', size: 1, modifiedAt: 1, duration: 6, width: 320, height: 180, fps: 24, videoCodec: 'h264', hasAudio: true }
-    const request: ExportRequest = {
-      canvas: { width: 320, height: 180, fps: 24, fit: 'contain' }, sources: [{ id: 'base', metadata: source }],
-      outputPath: '/out.mp4', segments: [{ id: 'segment', sourceId: 'base', sourceStart: 0, sourceEnd: 6 }], overlays: [overlay]
-    }
-    const original = buildFilterGraph(request, [{ overlay, index: 1 }]).graph
-    const none = { ...overlay, animation: 'none' as const }
-    expect(buildFilterGraph({ ...request, overlays: [none] }, [{ overlay: none, index: 1 }]).graph).toBe(original)
-    expect(original).toContain('colorchannelmixer=aa=0.6')
-    const fade = { ...overlay, animation: 'fade' as const }
-    const animated = buildFilterGraph({ ...request, overlays: [fade] }, [{ overlay: fade, index: 1 }]).graph
-    expect(animated).toContain("sendcmd=c='0 [expr] colorchannelmixer@visualalpha0 aa 0.6*(")
-    expect(animated).toContain('colorchannelmixer@visualalpha0=aa=0.6')
-    expect(animated).not.toContain('geq=')
-    expect(animated).toContain('(T-0.500000)/0.220000')
-    expect(animated).toContain('(2.000000-(T-0.500000))/0.220000')
-    expect(animated).toContain("enable='gte(t,0.500000)*lt(t,2.500000)'")
-    const customFade = { ...fade, animationFadeIn: 0, animationFadeOut: 0.8 }
-    const custom = buildFilterGraph({ ...request, overlays: [customFade] }, [{ overlay: customFade, index: 1 }]).graph
-    expect(custom).toContain('min(1')
-    expect(custom).toContain('(2.000000-(T-0.500000))/0.800000')
-    expect(custom).not.toContain('/0.000000')
-    const shortFade = { ...fade, duration: 0.2 }
-    expect(buildFilterGraph({ ...request, overlays: [shortFade] }, [{ overlay: shortFade, index: 1 }]).graph).toContain('(T-0.500000)/0.100000')
-    for (const animation of ['pop', 'bounce', 'shake'] as const) {
-      const effect = { ...overlay, animation }
-      const graph = buildFilterGraph({ ...request, overlays: [effect] }, [{ overlay: effect, index: 1 }]).graph
-      expect(graph).toContain("overlay=x='0+320/2-overlay_w/2+")
-      expect(graph).toContain(':eval=frame:eof_action=repeat')
-      expect(graph).toContain('(t-0.500000)')
-      if (animation === 'shake') expect(graph).toContain('sin(9*PI*')
-      else {
-        expect(graph).toContain("scale=w='max(2,2*round(iw*(")
-        expect(graph).not.toContain('geq=')
-        expect(graph.indexOf('colorchannelmixer@visualalpha0')).toBeLessThan(graph.indexOf("scale=w='max(2,2*round(iw*("))
-      }
-    }
-  })
-
-  it('applies custom motion timing and text fade timing without zero divisors', () => {
-    const source = { path: '/base.mp4', name: 'base.mp4', size: 1, modifiedAt: 1, duration: 3, width: 320, height: 180, fps: 30, videoCodec: 'h264', hasAudio: false }
-    const canvas = { width: 320, height: 180, fps: 30, fit: 'contain' as const }
-    const media: Extract<Overlay, { type: 'image' }> = {
-      id: 'image', type: 'image', name: 'Picture', path: '/picture.png',
-      start: 0.5, duration: 2, zIndex: 1, x: 0, y: 0, width: 1, height: 1, opacity: 0.6,
-      animation: 'pop', animationDuration: 0.8
-    }
-    const request = (overlay: Overlay): ExportRequest => ({
-      canvas, sources: [{ id: 'base', metadata: source }], outputPath: '/out.mp4',
-      segments: [{ id: 'base', sourceId: 'base', sourceStart: 0, sourceEnd: 3 }], overlays: [overlay]
-    })
-    const customMotion = buildFilterGraph(request(media), [{ overlay: media, index: 1 }]).graph
-    expect(customMotion).toContain('(t-0.500000)/0.520000')
-    expect(customMotion).toContain('(t-0.500000),0.800000')
-
-    const zeroMotion = { ...media, animation: 'bounce' as const, animationDuration: 0 }
-    const zeroMotionGraph = buildFilterGraph(request(zeroMotion), [{ overlay: zeroMotion, index: 1 }]).graph
-    expect(zeroMotionGraph).not.toContain('/0.000000')
-    expect(zeroMotionGraph).not.toContain("scale=w='max(2,2*round(iw*(")
-
-    const shortMotion = { ...media, duration: 0.2, animation: 'shake' as const, animationDuration: 5 }
-    const shortMotionGraph = buildFilterGraph(request(shortMotion), [{ overlay: shortMotion, index: 1 }]).graph
-    expect(shortMotionGraph).toContain('(t-0.500000)/0.200000')
-    expect(shortMotionGraph).not.toContain('/5.000000')
-
-    const text: Extract<Overlay, { type: 'text' }> = {
-      id: 'text', type: 'text', name: 'Title', start: 0.5, duration: 2, zIndex: 1,
-      x: 0.25, y: 0.25, width: 0.5, height: 0.2, opacity: 0.8, text: 'FADE',
-      fontFamily: 'Anton', fontSize: 7, color: '#fff', outlineColor: '#000', outlineWidth: 2,
-      shadow: false, align: 'center', animation: 'fade', animationDuration: 0,
-      animationFadeIn: 0.4, animationFadeOut: 0.8,
-      renderedTextBitmap: { dataUrl: 'data:image/png;base64,AA==', x: 70, y: 35, anchorX: 160, anchorY: 63 }
-    }
-    const textFade = buildFilterGraph(request(text), [{ overlay: text, index: 1 }]).graph
-    expect(textFade).toContain('T/0.400000')
-    expect(textFade).toContain('(2.000000-T)/0.800000')
-    expect(textFade).not.toContain('/0.000000')
-
-    const shortText = { ...text, duration: 0.2, animationFadeIn: 5, animationFadeOut: 5 }
-    const shortTextGraph = buildFilterGraph(request(shortText), [{ overlay: shortText, index: 1 }]).graph
-    expect(shortTextGraph).toContain('T/0.200000')
-    expect(shortTextGraph).toContain('(0.200000-T)/0.200000')
-  })
 
   it('estimates output space from timeline duration rather than source file size', () => {
     const source = { path: '/huge.mp4', name: 'huge.mp4', size: 100 * 1024 ** 3, modifiedAt: 1, duration: 3600, width: 1920, height: 1080, fps: 30, videoCodec: 'h264', hasAudio: true }
@@ -129,6 +41,33 @@ describe('FFmpeg export graph', () => {
     expect(graph).not.toContain("select='eq(n,0)',tpad=stop_mode=clone")
     expect(graph).toContain('anullsrc=channel_layout=stereo:sample_rate=48000:d=1.000000')
     expect(graph).toContain('[basev]zoompan=')
+  })
+
+  it('animates the Short crop across segment-local clocks while leaving ordinary video centered', () => {
+    const source = { path: '/wide.mp4', name: 'wide.mp4', size: 1, modifiedAt: 1, duration: 4, width: 1920, height: 1080, fps: 30, videoCodec: 'h264', hasAudio: false }
+    const common = {
+      sources: [{ id: 's', metadata: source }], outputPath: '/short.mp4', overlays: [],
+      segments: [
+        { id: 'one', sourceId: 's', sourceStart: 0, sourceEnd: 2 },
+        { id: 'two', sourceId: 's', sourceStart: 2, sourceEnd: 4 }
+      ]
+    }
+    const short = buildFilterGraph({
+      ...common,
+      canvas: { width: 1080, height: 1920, fps: 30, fit: 'cover' },
+      shortFramePoints: [{ id: 'point', time: 1, position: 1 }]
+    }, []).graph
+    expect(short).toContain("crop=1080:1920:x='(iw-ow)*(")
+    expect(short).toContain('if(lt(t,1),0.5')
+    expect(short).toContain('if(lt((t+2.000000),1),0.5')
+    expect(short).toContain('(3-2*')
+
+    const ordinary = buildFilterGraph({
+      ...common,
+      canvas: { width: 1920, height: 1080, fps: 30, fit: 'cover' }
+    }, []).graph
+    expect(ordinary).toContain('crop=1920:1080')
+    expect(ordinary).not.toContain("x='(iw-ow)*(")
   })
 
   it('exports every supported segment speed with matching video, audio, and silence timing', () => {
@@ -425,7 +364,7 @@ describe('FFmpeg export graph', () => {
         { id: 'left', sourceId: 'source', sourceStart: 0, sourceEnd: 2 },
         {
           id: 'inserted', sourceId: 'inserted', sourceStart: 0, sourceEnd: 1,
-          transition: { effect: 'dissolve', duration: 0.35 }
+          transition: { effect: 'fade', duration: 0.35 }
         },
         {
           id: 'right', sourceId: 'source', sourceStart: 2, sourceEnd: 5,
@@ -436,14 +375,43 @@ describe('FFmpeg export graph', () => {
     }
     const graph = buildFilterGraph(request, []).graph
     expect(graph).toContain('trim=start=0.000000:end=2.350000')
-    expect(graph).toContain('[vseg0][vseg1]xfade=transition=dissolve:duration=0.350000:offset=2.000000[vjoin1]')
-    expect(graph).toContain('[vjoin1][vseg2]xfade=transition=circleopen:duration=0.650000:offset=3.000000[vjoin2]')
+    expect(graph).toContain('[vseg0]split=2[vprefix1][voutgoing1]')
+    expect(graph).toContain('[vprefix1]trim=end=2.000000,setpts=PTS-STARTPTS,settb=AVTB[vprefix1trimmed]')
+    expect(graph).toContain('[voutgoing1]trim=start=2.000000:duration=0.350000,setpts=PTS-STARTPTS,settb=AVTB,fps=24[voutgoing1trimmed]')
+    expect(graph).toContain("[voutgoing1trimmed][vincoming1trimmed]xfade=transition=custom:expr='A*(P*P*(3-2*P))+B*(1-P*P*(3-2*P))':duration=0.350000:offset=0[vmixed1]")
+    expect(graph).toContain('[vprefix1trimmed][vmixed1][vremainder1trimmed]concat=n=3:v=1:a=0[vjoin1]')
+    expect(graph).toContain('[vjoin1]split=2[vprefix2][voutgoing2]')
+    expect(graph).toContain('[voutgoing2trimmed][vincoming2trimmed]xfade=transition=circleopen:duration=0.650000:offset=0[vmixed2]')
+    expect(graph).toContain('[vprefix2trimmed][vmixed2][vremainder2trimmed]concat=n=3:v=1:a=0[vjoin2]')
+    expect(graph).not.toContain('offset=2.000000')
+    expect(graph).not.toContain('offset=3.000000')
     expect(graph).not.toContain('vtail')
     expect(graph).toContain('[vjoin2]null[basev]')
     expect(graph).toContain('concat=n=3:v=0:a=1')
     expect(graph).toContain('afade=t=out:st=1.990000:d=0.010000[aseg0]')
     expect(graph).toContain('afade=t=in:st=0:d=0.010000,afade=t=out:st=0.990000:d=0.010000[aseg1]')
     expect(graph).toContain('afade=t=in:st=0:d=0.010000[aseg2]')
+  })
+
+  it('does not concatenate an empty remainder when a final transition consumes the incoming clip', () => {
+    const source = {
+      path: '/source.mp4', name: 'source.mp4', size: 100, modifiedAt: 1, duration: 2,
+      width: 320, height: 180, fps: 24, videoCodec: 'h264', hasAudio: false
+    }
+    const graph = buildFilterGraph({
+      canvas: { width: 320, height: 180, fps: 24, fit: 'contain' },
+      sources: [{ id: 'source', metadata: source }], outputPath: '/transitioned.mp4',
+      segments: [
+        { id: 'left', sourceId: 'source', sourceStart: 0, sourceEnd: 1 },
+        { id: 'right', sourceId: 'source', sourceStart: 1, sourceEnd: 2, transition: { effect: 'fade', duration: 1 } }
+      ],
+      overlays: []
+    }, []).graph
+
+    expect(graph).toContain('[vseg1]trim=duration=1.000000,setpts=PTS-STARTPTS,settb=AVTB,fps=24[vincoming1trimmed]')
+    expect(graph).toContain('[vprefix1trimmed][vmixed1]concat=n=2:v=1:a=0[vjoin1]')
+    expect(graph).not.toContain('[vseg1]split=2[vincoming1][vremainder1]')
+    expect(graph).not.toContain('[vremainder1]')
   })
 
   it('renders selected-range fade and blur edges before overlays', () => {
@@ -463,11 +431,14 @@ describe('FFmpeg export graph', () => {
     }, []).graph
     expect(graph).toContain('[basev]null[vrfadeclean0]')
     expect(graph).toContain('color=c=black:s=320x180')
-    expect(graph).toContain("[vrfadeclean0][vrblack0]blend@vrfade0=all_mode=normal:c0_opacity=1:c1_opacity=1:c2_opacity=1:c3_opacity=1,sendcmd=c='")
+    expect(graph).toContain("[vrfadeclean0][vrblack0]blend@vrfade0=all_mode=normal:c0_opacity=1:c1_opacity=1:c2_opacity=1:c3_opacity=1:enable='gt(")
+    expect(graph).toContain("enable='gt(between(t,1.000000,1.500000)")
+    expect(graph).toContain(",sendcmd=c='")
     expect(graph).toContain('blend@vrfade0 c0_opacity')
     expect(graph).toContain('[vrfade0]split=2[vrclean0][vrblurin0]')
     expect(graph).toContain("[vrblurin0]gblur=sigma=18:steps=2:enable='gt(")
-    expect(graph).toContain("[vrclean0][vrblur0]blend@vrout0=all_mode=normal:c0_opacity=1:c1_opacity=1:c2_opacity=1:c3_opacity=1,sendcmd=c='")
+    expect(graph).toContain("[vrclean0][vrblur0]blend@vrout0=all_mode=normal:c0_opacity=1:c1_opacity=1:c2_opacity=1:c3_opacity=1:enable='gt(")
+    expect(graph).toContain('+between(t,3.000000,4.000000)')
     expect(graph).not.toContain('blend=all_expr=')
   })
 })

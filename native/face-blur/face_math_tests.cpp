@@ -1,7 +1,9 @@
 #include "effects.hpp"
+#include "face_types.hpp"
 #include "tracker.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <cstdint>
 #include <stdexcept>
@@ -11,6 +13,9 @@
 
 using otc::face::Box;
 using otc::face::Detection;
+using otc::face::boxIou;
+using otc::face::clipBox;
+using otc::face::nonMaxSuppression;
 
 void require(bool condition, const char* message) {
   if (!condition) throw std::runtime_error(message);
@@ -43,6 +48,14 @@ std::vector<std::uint8_t> renderFresh(const std::vector<std::uint8_t>& input,
   return output;
 }
 
+Box translated(Box box, float x, float y) {
+  box.x1 += x;
+  box.x2 += x;
+  box.y1 += y;
+  box.y2 += y;
+  return box;
+}
+
 bool legacyLooksLikeCut(const std::vector<std::uint8_t>& previous,
                         const std::vector<std::uint8_t>& current,
                         int width,
@@ -73,6 +86,52 @@ bool legacyLooksLikeCut(const std::vector<std::uint8_t>& previous,
 }
 
 int main() {
+  require(std::abs(otc::face::faceScoreThresholdForSensitivity(0.0F) - 0.99F) < 1.0e-6F,
+          "sensitivity zero threshold");
+  require(std::abs(otc::face::faceScoreThresholdForSensitivity(0.5F) - 0.325F) < 1.0e-6F,
+          "sensitivity midpoint threshold");
+  require(std::abs(otc::face::faceScoreThresholdForSensitivity(0.7F) - 0.215F) < 1.0e-6F,
+          "sensitivity standard threshold");
+  require(std::abs(otc::face::faceScoreThresholdForSensitivity(1.0F) - 0.05F) < 1.0e-6F,
+          "sensitivity maximum threshold");
+  float previousThreshold = otc::face::faceScoreThresholdForSensitivity(0.0F);
+  for (int step = 1; step <= 100; ++step) {
+    const float sensitivity = static_cast<float>(step) / 100.0F;
+    const float threshold = otc::face::faceScoreThresholdForSensitivity(sensitivity);
+    require(std::isfinite(threshold) && threshold >= 0.05F && threshold <= 0.99F,
+            "sensitivity threshold range");
+    require(threshold <= previousThreshold + 1.0e-6F, "sensitivity threshold monotonicity");
+    previousThreshold = threshold;
+  }
+
+  // Synthetic crop-edge regression: raw boxes translate to one global face,
+  // while clipping each artificial crop first would reduce their IoU below NMS.
+  const Box leftCropRaw{220.0F, 100.0F, 560.0F, 360.0F};
+  const Box rightCropRaw{-164.0F, 100.0F, 176.0F, 360.0F};
+  const Box leftGlobal = translated(leftCropRaw, 0.0F, 0.0F);
+  const Box rightGlobal = translated(rightCropRaw, 384.0F, 0.0F);
+  require(boxIou(leftGlobal, rightGlobal) > 0.99F, "raw crop boxes merge");
+  const std::vector<Detection> mergedCropFace = nonMaxSuppression(
+      {{{leftGlobal, 0.95F}, {rightGlobal, 0.90F}}}, 0.4F, 256U);
+  require(mergedCropFace.size() == 1U, "raw crop boxes NMS");
+  const Box earlyLeft = translated(clipBox(leftCropRaw, 512, 512), 0.0F, 0.0F);
+  const Box earlyRight = translated(clipBox(rightCropRaw, 512, 512), 384.0F, 0.0F);
+  require(boxIou(earlyLeft, earlyRight) < 0.4F, "early crop clipping fragments face");
+
+  require(nonMaxSuppression(
+              {{{100.0F, 100.0F, 220.0F, 260.0F}, 0.9F}, {{240.0F, 100.0F, 360.0F, 260.0F}, 0.8F}},
+              0.4F, 256U)
+              .size() == 2U,
+          "disjoint faces stay separate");
+  require(nonMaxSuppression(
+              {{{100.0F, 100.0F, 220.0F, 260.0F}, 0.9F}, {{220.0F, 100.0F, 340.0F, 260.0F}, 0.8F}},
+              0.4F, 256U)
+              .size() == 2U,
+          "adjacent faces stay separate");
+  const Box bounded = clipBox({-10.0F, -20.0F, 40.0F, 50.0F}, 32, 32);
+  require(bounded.x1 == 0.0F && bounded.y1 == 0.0F && bounded.x2 == 32.0F && bounded.y2 == 32.0F,
+          "offimage clipping bounds");
+
   require(otc::face::boxIou({0, 0, 10, 10}, {5, 5, 15, 15}) > 0.14F, "IoU");
   otc::face::FaceTracker tracker;
   const std::vector<Detection> first{{{10, 10, 30, 30}, 0.9F}};
@@ -81,6 +140,51 @@ int main() {
   require(tracker.update(second, 0.1, 0.5F, 100, 100).size() == 1U, "associated track");
   require(tracker.update({}, 0.2, 0.5F, 100, 100).size() == 1U, "held track");
   require(tracker.update({}, 0.8, 0.5F, 100, 100).empty(), "expired hold");
+
+  // Hold is measured from the last detection, not the start of the effect.
+  // Exercise a continuous stream so a two-second hold cannot silently clamp to one.
+  for (const float hold : {0.0F, 0.3F, 0.5F, 1.0F, 2.0F}) {
+    otc::face::FaceTracker held;
+    require(held.update({}, 0.0, hold, 100, 100).empty(), "hold cannot invent an initial face");
+    require(held.update(first, 0.0, hold, 100, 100).size() == 1U, "hold acquires face");
+    const int heldFrames = static_cast<int>(std::lround(hold * 60.0F));
+    for (int frame = 1; frame <= heldFrames; ++frame) {
+      require(held.update({}, static_cast<double>(frame) / 60.0, hold, 100, 100).size() == 1U,
+              "hold covers missing frames through its duration");
+    }
+    require(held.update({}, static_cast<double>(heldFrames + 1) / 60.0, hold, 100, 100).empty(),
+            "hold expires after its duration");
+    require(held.update(first, 3.0, hold, 100, 100).size() == 1U, "face reacquired after long gap");
+    held.reset();
+    require(held.update({}, 3.01, hold, 100, 100).empty(), "reset prevents hold across cuts");
+  }
+
+  otc::face::FaceTracker refreshedHold;
+  require(refreshedHold.update(first, 0.0, 0.5F, 100, 100).size() == 1U, "refresh acquires face");
+  require(refreshedHold.update({}, 0.4, 0.5F, 100, 100).size() == 1U, "refresh holds initial miss");
+  require(refreshedHold.update(first, 0.45, 0.5F, 100, 100).size() == 1U, "refresh observes face again");
+  require(refreshedHold.update({}, 0.9, 0.5F, 100, 100).size() == 1U, "new detection restarts hold timer");
+  require(refreshedHold.update({}, 1.0, 0.5F, 100, 100).empty(), "refreshed hold expires");
+
+  // Outward motion must not shrink a held mask off an image edge before expiry.
+  const std::vector<std::pair<Box, Box>> edgeMotions{
+      {{65, 40, 85, 60}, {75, 40, 95, 60}},
+      {{15, 40, 35, 60}, {5, 40, 25, 60}},
+      {{40, 65, 60, 85}, {40, 75, 60, 95}},
+      {{40, 15, 60, 35}, {40, 5, 60, 25}}};
+  for (const auto& [beforeEdge, atEdge] : edgeMotions) {
+    otc::face::FaceTracker edgeHold;
+    (void)edgeHold.update({{beforeEdge, 0.99F}}, 0.0, 1.0F, 100, 100);
+    require(edgeHold.update({{atEdge, 0.99F}}, 0.1, 1.0F, 100, 100).size() == 1U, "edge face associated");
+    const std::vector<Box> held = edgeHold.update({}, 0.8, 1.0F, 100, 100);
+    require(held.size() == 1U, "edge hold remains visible before expiry");
+    require(std::abs((held[0].x2 - held[0].x1) - 20.0F) < 1.0e-5F &&
+                std::abs((held[0].y2 - held[0].y1) - 20.0F) < 1.0e-5F,
+            "edge hold preserves mask size");
+    require(held[0].x1 >= 0.0F && held[0].y1 >= 0.0F && held[0].x2 <= 100.0F && held[0].y2 <= 100.0F,
+            "edge hold stays inside frame");
+    require(edgeHold.update({}, 1.2, 1.0F, 100, 100).empty(), "edge hold still expires");
+  }
 
   otc::face::FaceTracker limitedTracker(1U);
   require(limitedTracker.update(first, 0.0, 1.0F, 100, 100).size() == 1U, "limited first track");

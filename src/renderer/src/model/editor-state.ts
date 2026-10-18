@@ -8,6 +8,7 @@ import type {
   InsertTransitions,
   JobProgress,
   Overlay,
+  ShortFrameDirection,
   TextAnimationPreset,
   VideoSpeed,
   VideoTransition
@@ -45,6 +46,7 @@ export interface EditorState {
   removeSelectedOverlay: () => void
   setSpeed: (rate: VideoSpeed) => void
   addFocusZoom: (zoom: FocusZoomAmount, focusX: number, focusY: number) => void
+  nudgeShortFrame: (direction: ShortFrameDirection) => void
   removeFocusZoom: () => void
   applyVideoTransition: (into?: VideoTransition, out?: VideoTransition) => void
   applyFaceBlur: (settings: FaceBlurSettings) => void

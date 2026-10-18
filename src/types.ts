@@ -62,9 +62,28 @@ export interface FocusZoomEffect {
   focusY: number
 }
 
+export type ShortFrameDirection = 'left' | 'right'
+// Leaves room to preserve the old 100 range moves as start/end points plus an initial anchor.
+export const shortFrameMaxPoints = 201
+
+export interface ShortFramePoint {
+  id: string
+  time: number
+  position: number
+}
+
+/** Legacy saved/export schema; live sessions use ShortFramePoint. */
+export interface ShortFrameMove {
+  id: string
+  start: number
+  duration: number
+  direction: ShortFrameDirection
+}
+
 export type FaceBlurDetail = 'standard' | 'small'
 export type FaceBlurStyle = 'pixelate' | 'blur' | 'mask'
 export const faceBlurMaxEffects = 100
+export const faceBlurMaxHoldSeconds = 2
 
 export interface FaceBlurEffect {
   id: string
@@ -135,6 +154,8 @@ export interface ProjectCanvas {
   height: number
   fps: number
   fit: 'contain' | 'cover'
+  /** Legacy saved-project input; live sessions use shortFramePoints. */
+  shortFramePosition?: number
 }
 
 interface OverlayBase {
@@ -237,6 +258,7 @@ export interface EditSession {
   focusZooms: FocusZoomEffect[]
   faceBlurs?: FaceBlurEffect[]
   videoTransitions?: VideoRangeTransition[]
+  shortFramePoints?: ShortFramePoint[]
 }
 
 export interface ExportRequest {
@@ -248,6 +270,7 @@ export interface ExportRequest {
   focusZooms?: FocusZoomEffect[]
   faceBlurs?: FaceBlurEffect[]
   videoTransitions?: VideoRangeTransition[]
+  shortFramePoints?: ShortFramePoint[]
 }
 
 export interface FacePreviewRequest extends ExportRequest {
@@ -271,6 +294,9 @@ export interface SavedSessionSnapshot {
   focusZooms?: FocusZoomEffect[]
   videoTransitions?: VideoRangeTransition[]
   faceBlurs?: FaceBlurEffect[]
+  shortFramePoints?: ShortFramePoint[]
+  /** Accepted only as an input to saved-project migration. */
+  shortFrameMoves?: ShortFrameMove[]
 }
 
 export interface SavedSession extends SavedSessionSnapshot {
@@ -314,6 +340,7 @@ export interface FacePackStatus {
 
 export interface otcApi {
   openVideo: () => Promise<string | null>
+  openVideoPath: (path: string) => Promise<string | VideoDirectory>
   listVideoDirectory: (directory?: string) => Promise<VideoDirectory>
   authorizeVideo: (path: string) => Promise<string>
   searchTemplates: (source: TemplateSource, category: TemplateCategory, query: string) => Promise<OnlineTemplate[]>
@@ -324,7 +351,7 @@ export interface otcApi {
   probeAsset: (path: string) => Promise<AssetMetadata>
   waveform: (path: string) => Promise<number[]>
   scanAssets: () => Promise<AssetItem[]>
-  chooseExportPath: (defaultName: string) => Promise<string | null>
+  chooseExportPath: (defaultName: string, path?: string) => Promise<string | null>
   exportVideo: (request: ExportRequest) => Promise<void>
   loadSession: () => Promise<SavedSession | null>
   saveSession: (session: SavedSession) => Promise<void>
@@ -332,6 +359,7 @@ export interface otcApi {
   cancelJob: (id: string) => Promise<boolean>
   getGpuDiagnostics: () => Promise<GpuDiagnostics>
   facePackStatus: () => Promise<FacePackStatus>
+  clearFaceCache: () => Promise<void>
   previewFaces: (request: FacePreviewRequest) => Promise<string>
   restoreFacePreview: (request: ExportRequest) => Promise<FacePreviewResult[]>
   getPathUrl: (path: string) => Promise<string>

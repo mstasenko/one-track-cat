@@ -5,6 +5,8 @@
 
 namespace otc::face {
 
+inline constexpr float maximumHoldSeconds = 2.0F;
+
 struct Box {
   float x1 = 0.0F;
   float y1 = 0.0F;
@@ -30,6 +32,10 @@ struct Effect {
 float boxIou(const Box& first, const Box& second);
 Box clipBox(const Box& box, int width, int height);
 bool validBox(const Box& box);
+
+// Keep the established score mapping for sensitivity >= 0.5 while making the
+// low-sensitivity half stricter, reaching a .99 threshold at sensitivity 0.
+float faceScoreThresholdForSensitivity(float sensitivity);
 
 std::vector<Detection> nonMaxSuppression(std::vector<Detection> detections,
                                           float iouThreshold,

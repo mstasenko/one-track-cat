@@ -39,7 +39,7 @@ function pipelineOptions(
   return { ...options, onWorkerStderr: session.onWorkerStderr }
 }
 
-function decoderCommand(
+export function decoderCommand(
   inputArgs: string[],
   filter: { graph: string; videoLabel: string; audioLabel: string },
   duration: number,
@@ -52,7 +52,7 @@ function decoderCommand(
   ] }
 }
 
-function rawVideoEncoderCommand(
+export function rawVideoEncoderCommand(
   encoder: ExportEncoder,
   width: number,
   height: number,

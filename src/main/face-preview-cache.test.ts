@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -81,6 +81,22 @@ describe('completed face preview cache', () => {
     await expect(freshCache.loadFacePreview(key, output)).resolves.toEqual(expect.objectContaining({
       key, range: [1, 2], encodingPolicy: 2
     }))
+  })
+
+  it.skipIf(process.platform === 'win32')('writes private permissions for full and range preview sidecars', async () => {
+    const fullOutput = join(directory, 'face-preview', 'preview.mp4')
+    const rangeOutput = join(directory, 'face-preview', 'preview-0-30.mp4')
+    await mkdir(join(directory, 'face-preview'), { recursive: true })
+    await writeFile(fullOutput, 'full-preview')
+    await writeFile(rangeOutput, 'range-preview')
+
+    await rememberFacePreview('full-key', fullOutput, [0, 1])
+    await rememberFacePreviewRange('range-key', rangeOutput, [0, 1])
+
+    const fullMetadata = await stat(join(directory, 'face-preview', 'preview.json'))
+    const rangeMetadata = await stat(join(directory, 'face-preview', 'preview-0-30.json'))
+    expect(fullMetadata.mode & 0o777).toBe(0o600)
+    expect(rangeMetadata.mode & 0o777).toBe(0o600)
   })
 
   it('persists a range sidecar stamped against its immutable file and ignores disjoint effects', async () => {

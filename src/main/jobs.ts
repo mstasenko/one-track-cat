@@ -90,6 +90,10 @@ export class JobManager {
     return true
   }
 
+  hasActiveJobs(): boolean {
+    return this.active.size > 0 || this.pending.size > 0
+  }
+
   shutdown(): Promise<void> {
     if (this.shutdownPromise) return this.shutdownPromise
     this.closed = true
@@ -200,3 +204,7 @@ export class JobManager {
 }
 
 export const jobs = new JobManager()
+
+export function hasActiveJobs(): boolean {
+  return jobs.hasActiveJobs()
+}

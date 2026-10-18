@@ -83,6 +83,10 @@ export function cancelFaceExport(id: string): boolean {
   return true
 }
 
+export function hasActiveFaceExports(): boolean {
+  return active.size > 0 || pending.size > 0
+}
+
 /** Cancels every face pipeline and waits for cooperative GPU/CPU teardown. */
 export async function shutdownFaceExports(): Promise<void> {
   shutdownRequested = true

@@ -12,7 +12,7 @@ std::vector<Detection> detectFrame(RetinaFaceDetector& detector,
                                    int width,
                                    int height,
                                    const Effect* effect) {
-  const float threshold = effect == nullptr ? 0.55F : 0.05F + (1.0F - effect->sensitivity) * 0.55F;
+  const float threshold = effect == nullptr ? 0.55F : faceScoreThresholdForSensitivity(effect->sensitivity);
   if (effect == nullptr || !effect->detail) return detector.detect(frame, width, height, threshold);
 
   constexpr int maximumTileSide = 640;

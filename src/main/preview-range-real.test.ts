@@ -185,7 +185,8 @@ describe('CPU selected-preview composition', () => {
       const frame = result[frameIndex]
       const movingSource = reference[frameIndex]
       if (!frame || !movingSource) throw new Error('missing overlap frame')
-      const weight = 1 - (frameIndex / fps - 3)
+      const progress = 1 - (frameIndex / fps - 3)
+      const weight = progress * progress * (3 - 2 * progress)
       const meanError = frame.reduce((sum, value, byte) => sum + Math.abs(value - (movingSource[byte] ?? 0) * weight), 0) / frame.length
       expect(meanError).toBeLessThan(3)
     }

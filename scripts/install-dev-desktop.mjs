@@ -1,4 +1,4 @@
-import { copyFile, mkdir, writeFile } from 'node:fs/promises'
+import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 
@@ -14,18 +14,27 @@ await Promise.all([
   mkdir(iconsDirectory, { recursive: true })
 ])
 await copyFile(iconPath, join(iconsDirectory, 'OneTrackCat.png'))
-try {
-  await writeFile(desktopPath, `[Desktop Entry]
+const developmentEntry = `[Desktop Entry]
 Type=Application
-Name=OneTrackCat
-Comment=Turn gameplay into highlights.
+Version=1.0
+Name=OneTrackCat Dev
+Comment=Run the OneTrackCat development build
 Icon=OneTrackCat
-Exec=/usr/bin/false
+Exec=/usr/bin/systemd-run --user --collect --quiet --unit=one-track-cat-dev --same-dir /usr/local/bin/npm run dev
+Path=${projectRoot}
 Terminal=false
-NoDisplay=true
 Categories=AudioVideo;Video;
+StartupNotify=false
 StartupWMClass=OneTrackCat
-`, { flag: 'wx', mode: 0o644 })
+X-OneTrackCat-Development=true
+`
+
+try {
+  const existing = await readFile(desktopPath, 'utf8')
+  if (existing.includes('X-OneTrackCat-Development=true') || existing.includes('Name=OneTrackCat Dev')) {
+    await writeFile(desktopPath, developmentEntry, { mode: 0o644 })
+  }
 } catch (catchError) {
-  if (catchError?.code !== 'EEXIST') throw catchError
+  if (catchError?.code !== 'ENOENT') throw catchError
+  await writeFile(desktopPath, developmentEntry, { mode: 0o644 })
 }

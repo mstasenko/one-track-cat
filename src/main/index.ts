@@ -1,13 +1,6 @@
 import { dirname, join, resolve } from 'node:path'
-import {
-  app,
-  BrowserWindow,
-  dialog,
-  ipcMain,
-  Menu,
-  protocol,
-  shell
-} from 'electron'
+import { stat } from 'node:fs/promises'
+import { app, BrowserWindow, dialog, ipcMain, Menu, protocol, shell } from 'electron'
 import packageMetadata from '../../package.json'
 import type {
   ExportRequest,
@@ -17,7 +10,8 @@ import type {
   SavedSession,
   SavedSessionSnapshot
 } from '../types'
-import { assetExtensions, categoryFor, displayName, mediaExtensions, scanAssets } from './assets'
+import { categoryFor, scanAssets } from './assets'
+import { registerFileDialogs } from './file-dialogs'
 import { exportVideo } from './exporter'
 import { jobs } from './jobs'
 import {
@@ -33,7 +27,6 @@ import { loadSessionFile, resetSessionFile, saveSessionFile } from './session-st
 import { SessionPathRegistry } from './path-registry'
 import { svgDataUrl } from './svg'
 import {
-  parseDefaultName,
   parseExportRequest,
   parseJobId,
   parseMediaMetadata,
@@ -43,6 +36,7 @@ import {
 import { referencedExportSources } from '../export-sources'
 import { facePackStatus } from './face-pack'
 import { previewFaces, restoreFaces } from './face-preview'
+import { clearFaceCache } from './face-cache-cleanup'
 import { cancelFaceExport, shutdownFaceExports } from './face-process'
 import { initialVideoDirectory, listVideoDirectory } from './video-picker'
 import { importTemplate, searchTemplates, templatePage } from './online-templates'
@@ -336,53 +330,26 @@ function registerIpc(
   paths: SessionPathRegistry,
   requestedPath?: string
 ): void {
-  ipcMain.handle('dialog:open-video', async () => {
-    const result = testVideoPath ? { filePaths: [testVideoPath] } : await dialog.showOpenDialog({
-      title: 'Open a video',
-      defaultPath: directories.open,
-      properties: ['openFile'],
-      filters: [{ name: 'Video', extensions: assetExtensions.video }]
-    })
-    const selected = testVideoPath ?? result.filePaths[0]
-    if (!selected) return null
-    const path = await paths.allowRead(selected)
-    directories.open = dirname(path)
-    return path
-  })
+  registerFileDialogs(directories, paths, { video: testVideoPath, media: testMediaPath, output: testOutputPath })
   ipcMain.handle('video:list', async (_event, value: unknown) => {
     const directory = value === undefined ? directories.open : parsePath(value)
     const result = await listVideoDirectory(directory)
     directories.open = result.path
     return result
   })
-  ipcMain.handle('dialog:open-media', async () => {
-    const result = testMediaPath
-      ? { filePaths: [testMediaPath] }
-      : await dialog.showOpenDialog({
-          title: 'Add media',
-          defaultPath: directories.media,
-          properties: ['openFile'],
-          filters: [{ name: 'Audio, video, GIF, or image', extensions: mediaExtensions }]
-        })
-    const selected = testMediaPath ?? result.filePaths[0]
-    if (!selected) return null
-    const type = categoryFor(selected)
-    if (!type) return null
-    const path = await paths.allowRead(selected)
-    directories.media = dirname(path)
-    return { path, type, name: displayName(path) }
-  })
-  ipcMain.handle('dialog:export-path', async (_event, value: unknown) => {
-    const defaultName = parseDefaultName(value)
-    if (testOutputPath) return paths.allowWrite(testOutputPath)
-    const result = await dialog.showSaveDialog({
-      title: 'Export edited video',
-      defaultPath: join(directories.export, defaultName),
-      filters: [{ name: 'MP4 Video', extensions: ['mp4'] }]
-    })
-    if (!result.filePath) return null
-    const path = await paths.allowWrite(result.filePath)
-    directories.export = dirname(path)
+  ipcMain.handle('video:open-path', async (_event, value: unknown) => {
+    const requested = parsePath(value)
+    const info = await stat(requested)
+    if (info.isDirectory()) {
+      const result = await listVideoDirectory(requested)
+      directories.open = result.path
+      return result
+    }
+    if (!info.isFile() || categoryFor(requested) !== 'video') {
+      throw new Error('Only video files can be opened here')
+    }
+    const path = await paths.allowRead(requested)
+    directories.open = dirname(path)
     return path
   })
   ipcMain.handle('media:authorize-drop', async (_event, value: unknown) => {
@@ -411,9 +378,13 @@ function registerIpc(
   ipcMain.handle('faces:pack-status', facePackStatus)
   ipcMain.handle('faces:preview', (_event, value: unknown) => previewFaces(value, paths, trustedExport))
   ipcMain.handle('faces:restore', (_event, value: unknown) => restoreFaces(value, paths, trustedExport))
+  ipcMain.handle('face-cache:clear', () => clearFaceCache())
   ipcMain.handle('session:load', () => requestedPath ? null : loadSession(paths))
   ipcMain.handle('session:save', (_event, value: unknown) => saveSession(value, paths))
-  ipcMain.handle('session:reset', () => resetSessionFile(statePath()))
+  ipcMain.handle('session:reset', async () => {
+    await resetSessionFile(statePath())
+    await clearFaceCache()
+  })
   ipcMain.handle('export:start', async (_event, value: unknown) => {
     try {
       await exportVideo(await trustedExport(value, paths))

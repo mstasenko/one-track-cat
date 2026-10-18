@@ -19,6 +19,7 @@ function contentRenderKey(session: EditSession | null): string {
     segments: session.segments,
     overlays: session.overlays,
     focusZooms: session.focusZooms,
+    shortFramePoints: session.shortFramePoints,
     videoTransitions: session.videoTransitions
   })
 }
@@ -127,6 +128,7 @@ export function useFacePreview(
     session?.segments,
     session?.overlays,
     session?.focusZooms,
+    session?.shortFramePoints,
     session?.videoTransitions
   ])
   const outputKey = useMemo(
@@ -222,6 +224,9 @@ export function useFacePreview(
     const currentContentKey = contentRenderKey(current)
     const currentFaceBlurs = faceBlursSnapshot(current)
     const requestedRange = previewRange ?? deletionRange(current)
+    // Main validates timeline seconds before aligning frames; the final rounded
+    // frame boundary can lie beyond a clip's fractional duration.
+    const requestRange = requestedRange ? [...requestedRange] as [number, number] : undefined
     const capturedRange = capturedPreviewRange(current, requestedRange)
     activeGeneration.current = currentGeneration
     activePreviewRange.current = capturedRange
@@ -239,7 +244,7 @@ export function useFacePreview(
       if (currentGeneration !== generation.current) return
       const mediaUrl = await window.otc.previewFaces({
         ...request,
-        previewRange: requestedRange ? capturedRange : undefined
+        previewRange: requestRange
       })
       if (currentGeneration === generation.current && renderKey(sessionRef.current) === currentOutputKey) {
         const result = { url: mediaUrl, start: capturedRange[0], end: capturedRange[1] }

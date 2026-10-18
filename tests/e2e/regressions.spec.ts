@@ -360,7 +360,7 @@ test('ripple-inserts and exports a second main-timeline video', async () => {
   await expect.poll(() => window.locator('.playhead').evaluate((element) => parseFloat((element as HTMLElement).style.left))).toBeCloseTo(50, 1)
   // Land just inside the fade; exact boundary clicks can round to the preceding frame.
   await seekTimeline(window, 0.27)
-  await expect(window.locator('.preview-source-video[data-transition="dissolve"]')).toBeVisible()
+  await expect(window.locator('.preview-source-video:not(.preview-transition-previous)[data-transition="dissolve"]')).toBeVisible()
   await expect(window.getByRole('region', { name: 'Video preview' }).getByLabel('Outgoing transition video')).toBeVisible()
 
   const timeline = window.locator('.timeline')
@@ -369,7 +369,7 @@ test('ripple-inserts and exports a second main-timeline video', async () => {
   await hover(timeline, { position: { x: timelineBox.width * 0.30, y: 20 } })
   const hoverFrame = window.locator('.timeline-hover-frame')
   await expect(hoverFrame.locator('video')).toHaveCount(2)
-  await expect(hoverFrame.locator('video[data-transition="dissolve"]')).toBeVisible()
+  await expect(hoverFrame.locator('video:not([aria-label="Outgoing transition video"])[data-transition="dissolve"]')).toBeVisible()
   await hover(window.locator('.transport'))
 
   const transitionedVideo = window.locator('.preview-source-video:not(.preview-transition-previous)')
@@ -389,7 +389,7 @@ test('ripple-inserts and exports a second main-timeline video', async () => {
   expect(result.streams.some((stream) => stream.codec_type === 'audio')).toBe(true)
 })
 
-test('fills a vertical Short with a full-frame video overlay in preview and export', async () => {
+test('shows full source framing for a Short and fills its selected frame in export', async () => {
   // Headless Wayland pointer round trips consume time before export.
   test.setTimeout(90_000)
   const directory = temporaryDirectory('otc-short-')
@@ -401,15 +401,17 @@ test('fills a vertical Short with a full-frame video overlay in preview and expo
   const window = await app.firstWindow()
   await click(window.getByRole('button', { name: 'Open Short', exact: true }))
   await completeVideoPicker(window)
-  await expect(window.locator('.preview-stage')).toHaveCSS('aspect-ratio', '1080 / 1920')
+  await expect(window.locator('.preview-stage')).toHaveCSS('aspect-ratio', '320 / 180')
+  await expect(window.locator('.preview-source-video:not(.preview-transition-previous)')).toHaveCSS('object-fit', 'contain')
+  await expect(window.locator('.short-frame-guide')).toHaveCSS('border-top-color', 'rgb(255, 60, 69)')
   await click(window.getByRole('button', { name: 'New', exact: true }))
   await expect(window.locator('.visual-overlay video')).toHaveCSS('object-fit', 'contain')
-  const stage = await window.locator('.preview-stage').boundingBox()
+  const stage = await window.locator('.short-frame-guide').boundingBox()
   const item = await window.locator('.visual-overlay').boundingBox()
   if (!stage || !item) throw new Error('Overlay is not visible')
   await moveMouse(window, item.x + 5, item.y + 5)
   await window.mouse.down()
-  await moveMouse(window, stage.x + 5, stage.y + 5)
+  await moveMouse(window, stage.x, stage.y)
   await window.mouse.up()
   const handle = await window.getByRole('button', { name: 'Resize overlay' }).boundingBox()
   if (!handle) throw new Error('Resize handle is not visible')

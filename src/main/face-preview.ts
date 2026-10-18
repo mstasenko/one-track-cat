@@ -20,6 +20,10 @@ import { validatedPreviewRange } from './preview-range'
 
 let rendering = false
 
+export function isFacePreviewRendering(): boolean {
+  return rendering
+}
+
 const rangeTolerance = 0.0001
 const maximumRangePreviews = 128
 

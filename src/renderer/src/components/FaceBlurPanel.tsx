@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import type { EditSession, FaceBlurEffect, FaceBlurSettings } from '@shared/types'
+import { faceBlurMaxHoldSeconds, type EditSession, type FaceBlurEffect, type FaceBlurSettings } from '@shared/types'
 import { deletionRange, timelineDuration } from '../model/timeline'
 import { NumberControl } from './NumberControl'
 
@@ -20,7 +20,7 @@ export interface FaceBlurPanelProps {
 }
 
 const defaultFaceBlurDraft: FaceBlurDraft = {
-  sensitivity: 0.7,
+  sensitivity: 0.01,
   detail: 'small',
   holdSeconds: 0.3,
   strength: 0.7,
@@ -152,7 +152,7 @@ export function FaceBlurPanel(props: FaceBlurPanelProps): React.JSX.Element {
           onChange={(event) => changeDraft('detail', event.target.checked ? 'small' : 'standard')}
         />
       </label>
-      <NumberControl label="Hold missed faces seconds" value={draft.holdSeconds} min={0} max={1} step={0.05} onChange={(value) => changeDraft('holdSeconds', value)} />
+      <NumberControl label="Hold missed faces seconds" value={draft.holdSeconds} min={0} max={faceBlurMaxHoldSeconds} step={0.05} onChange={(value) => changeDraft('holdSeconds', value)} />
       <FaceBlurControl label="Strength" value={draft.strength} onChange={(value) => changeDraft('strength', value)} />
       <label className="control-row">
         <span>Style</span>

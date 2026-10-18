@@ -262,7 +262,7 @@ function InsertVideoPanel({ onBack, onInsert }: {
 }): React.JSX.Element {
   const [into, setInto] = useState<TransitionEffect | 'none'>('none')
   const [back, setBack] = useState<TransitionEffect | 'none'>('none')
-  const [duration, setDuration] = useState(0.65)
+  const [duration, setDuration] = useState(2)
   const transitionsEnabled = into !== 'none' || back !== 'none'
 
   const selectVideo = (): void => {

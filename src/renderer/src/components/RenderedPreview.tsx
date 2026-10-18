@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { RenderedFacePreview } from '../model/use-face-preview'
 
 interface RenderedPreviewProps {
@@ -22,8 +22,8 @@ function localTime(preview: RenderedFacePreview, playhead: number, playing: bool
   return Math.min(duration, target + 0.5 / fps)
 }
 
-function isAtTimelineEnd(preview: RenderedFacePreview, total: number): boolean {
-  return preview.end >= total - RANGE_END_EPSILON
+function isAtTimelineEnd(end: number, total: number): boolean {
+  return end >= total - RANGE_END_EPSILON
 }
 
 function syncRenderedTime(
@@ -89,28 +89,69 @@ export function RenderedPreview({
     }
   }, [playing, preview.url])
 
-  const handoff = (): void => {
+  const handoff = useCallback((): void => {
     if (handedOff.current) return
     handedOff.current = true
     onPlayheadRef.current(Math.min(preview.end, total))
-    if (isAtTimelineEnd(preview, total)) onPlayingChangeRef.current(false)
+    if (isAtTimelineEnd(preview.end, total)) onPlayingChangeRef.current(false)
     // Leave the media running for a range handoff. The parent switches to the
     // source preview after the playhead update, avoiding an audible pause.
-  }
+  }, [preview.end, total])
 
-  const onTimeUpdate = (event: React.SyntheticEvent<HTMLVideoElement>): void => {
-    const video = event.currentTarget
+  const publishTime = useCallback((video: HTMLVideoElement, mediaTime: number): void => {
     if (!playingRef.current || seekingFromTimeline.current || handedOff.current) return
     const rangeDuration = Math.max(0, Math.min(preview.end, total) - preview.start)
     const mediaDuration = Number.isFinite(video.duration) && video.duration > 0
       ? Math.min(rangeDuration, video.duration)
       : rangeDuration
-    if (video.currentTime >= mediaDuration - RANGE_END_EPSILON) {
+    if (mediaTime >= mediaDuration - RANGE_END_EPSILON) {
       handoff()
       return
     }
-    onPlayheadRef.current(Math.min(total, preview.end, preview.start + video.currentTime))
-  }
+    onPlayheadRef.current(Math.min(total, preview.end, preview.start + mediaTime))
+  }, [handoff, preview.end, preview.start, total])
+
+  useEffect(() => {
+    const video = videoRef.current
+    if (!video || !playing) return
+    let active = true
+    let callbackId: number | undefined
+    let fallbackTimer: number | undefined
+    const frameInterval = 1000 / Math.max(1, fps)
+    const watchdogDelay = Math.max(100, frameInterval * 2)
+    const clearFallback = (): void => {
+      if (fallbackTimer !== undefined) window.clearTimeout(fallbackTimer)
+      fallbackTimer = undefined
+    }
+    const scheduleFallback = (delay: number): void => {
+      clearFallback()
+      fallbackTimer = window.setTimeout(() => {
+        if (!active) return
+        publishTime(video, video.currentTime)
+        scheduleFallback(frameInterval)
+      }, delay)
+    }
+    const update = (_now: number, metadata: VideoFrameCallbackMetadata): void => {
+      if (!active) return
+      publishTime(video, metadata.mediaTime)
+      callbackId = video.requestVideoFrameCallback(update)
+      scheduleFallback(watchdogDelay)
+    }
+    if (typeof video.requestVideoFrameCallback === 'function') {
+      callbackId = video.requestVideoFrameCallback(update)
+      // Background and headless rendering can stall presented-frame callbacks.
+      scheduleFallback(watchdogDelay)
+    } else {
+      scheduleFallback(frameInterval)
+    }
+    return () => {
+      active = false
+      clearFallback()
+      if (callbackId !== undefined && typeof video.cancelVideoFrameCallback === 'function') {
+        video.cancelVideoFrameCallback(callbackId)
+      }
+    }
+  }, [fps, playing, preview.url, publishTime])
 
   return (
     <>
@@ -128,7 +169,6 @@ export function RenderedPreview({
         onEnded={() => {
           if (playingRef.current && !seekingFromTimeline.current) handoff()
         }}
-        onTimeUpdate={onTimeUpdate}
       />
       {mediaError && <div className="preview-error" role="alert">{mediaError}</div>}
     </>

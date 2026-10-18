@@ -21,6 +21,7 @@ function deepFreeze<T>(value: T): T {
 function api(): otcApi {
   return {
     openVideo: vi.fn().mockResolvedValue('/source.mp4'),
+    openVideoPath: vi.fn().mockResolvedValue('/source.mp4'),
     listVideoDirectory: vi.fn().mockResolvedValue({ path: '/videos', parent: null, entries: [], truncated: false }),
     authorizeVideo: vi.fn().mockResolvedValue('/source.mp4'),
     searchTemplates: vi.fn().mockResolvedValue([]),
@@ -39,6 +40,7 @@ function api(): otcApi {
     loadSession: vi.fn().mockResolvedValue(null),
     saveSession: vi.fn().mockResolvedValue(undefined),
     resetSession: vi.fn().mockResolvedValue(undefined),
+    clearFaceCache: vi.fn().mockResolvedValue(undefined),
     cancelJob: vi.fn().mockResolvedValue(true),
     getGpuDiagnostics: vi.fn().mockResolvedValue({ hardwareAcceleration: true, videoDecode: 'enabled', gpuCompositing: 'enabled' }),
     getPathUrl: vi.fn((path: string) => Promise.resolve(`media:${path}`)),

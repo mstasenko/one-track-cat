@@ -22,6 +22,7 @@ let originalShowModal: PropertyDescriptor | undefined
 let originalClose: PropertyDescriptor | undefined
 let originalLoad: PropertyDescriptor | undefined
 let api: {
+  openVideoPath: ReturnType<typeof vi.fn>
   listVideoDirectory: ReturnType<typeof vi.fn>
   authorizeVideo: ReturnType<typeof vi.fn>
   getPathUrl: ReturnType<typeof vi.fn>
@@ -58,10 +59,20 @@ function pointerLeave(target: HTMLElement, relatedTarget: EventTarget | null = n
   target.dispatchEvent(new MouseEvent('mouseout', { bubbles: true, relatedTarget }))
 }
 
+function setInputValue(input: HTMLInputElement, value: string): void {
+  // React tracks the instance setter, so tests must call the native setter.
+  // eslint-disable-next-line @typescript-eslint/unbound-method
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+  if (!setter) throw new Error('Input value setter missing')
+  setter.call(input, value)
+  input.dispatchEvent(new Event('input', { bubbles: true }))
+}
+
 beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
   vi.useFakeTimers()
   api = {
+    openVideoPath: vi.fn().mockImplementation((path: string) => Promise.resolve(path)),
     listVideoDirectory: vi.fn().mockResolvedValue(directory),
     authorizeVideo: vi.fn().mockImplementation((path: string) => Promise.resolve(path)),
     getPathUrl: vi.fn().mockImplementation((path: string) => Promise.resolve(`media:${path}`)),
@@ -253,6 +264,51 @@ describe('VideoPicker', () => {
     expect(api.openVideo).toHaveBeenCalledOnce()
     expect(api.authorizeVideo).toHaveBeenCalledTimes(1)
     expect(pause).toHaveBeenCalled()
+  })
+
+  it('authorizes a typed video path and resolves the pending choice', async () => {
+    const { app, choice } = mount()
+    await flush()
+    api.openVideoPath.mockResolvedValueOnce('/canonical/typed.mp4')
+    const input = app.querySelector('[aria-label="Video or folder path"]')
+    if (!(input instanceof HTMLInputElement)) throw new Error('Video path input missing')
+    act(() => { setInputValue(input, '/videos/typed.mp4') })
+    const form = app.querySelector('form.video-picker-location')
+    if (!(form instanceof HTMLFormElement)) throw new Error('Video path form missing')
+    act(() => { form.requestSubmit() })
+    await flush()
+
+    await expect(choice).resolves.toBe('/canonical/typed.mp4')
+    expect(api.openVideoPath).toHaveBeenCalledWith('/videos/typed.mp4')
+    expect(api.listVideoDirectory).toHaveBeenCalledTimes(1)
+  })
+
+  it('navigates to a typed directory path and keeps the picker open', async () => {
+    const nested: VideoDirectory = {
+      path: '/videos/Clips', parent: '/videos', truncated: false,
+      entries: [{ path: '/videos/Clips/nested.mp4', name: 'nested.mp4', kind: 'video' }]
+    }
+    const { app, choice } = mount()
+    await flush()
+    api.openVideoPath.mockResolvedValueOnce(nested)
+    const input = app.querySelector('[aria-label="Video or folder path"]')
+    if (!(input instanceof HTMLInputElement)) throw new Error('Video path input missing')
+    act(() => { setInputValue(input, '/videos/Clips') })
+    const form = app.querySelector('form.video-picker-location')
+    if (!(form instanceof HTMLFormElement)) throw new Error('Video path form missing')
+    act(() => { form.requestSubmit() })
+    await flush()
+
+    expect(api.openVideoPath).toHaveBeenCalledWith('/videos/Clips')
+    expect(input.value).toBe('/videos/Clips')
+    expect(app.querySelector('[data-video-path="/videos/Clips/nested.mp4"]')).not.toBeNull()
+    const dialog = app.querySelector('[data-video-picker]')
+    expect(dialog instanceof HTMLDialogElement && dialog.open).toBe(true)
+
+    const cancel = [...app.querySelectorAll('button')].find((candidate) => candidate.textContent === 'Cancel')
+    if (!(cancel instanceof HTMLButtonElement)) throw new Error('Cancel button missing')
+    act(() => { cancel.click() })
+    await expect(choice).resolves.toBeNull()
   })
 
   it('does not reveal a directory response that arrives after cancellation', async () => {

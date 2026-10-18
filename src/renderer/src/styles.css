@@ -277,6 +277,12 @@ progress::-moz-progress-bar { border-radius: inherit; background: var(--accent);
 .confirmation-dialog-actions button { min-width: 86px; }
 .confirmation-dialog-destructive { background: var(--accent); border-color: var(--accent); color: #101608; font-weight: 800; }
 .confirmation-dialog-destructive:hover:not(:disabled) { background: var(--accent-bright); border-color: var(--text); }
+.ai-export-path-label { display: block; margin-top: 16px; color: var(--text-muted); }
+.ai-export-path-row { display: flex; gap: 8px; margin: 6px 0 14px; }
+.ai-export-path-row input { min-width: 0; flex: 1; }
+.ai-export-path-error { margin: -6px 0 12px !important; color: #ffb6a9 !important; }
+.ai-export-progress-track { margin-top: 10px; }
+.ai-export-download-status { margin-top: 10px; margin-bottom: 0; }
 
 .welcome { flex: 1; margin: 60px; display: grid; place-content: center; text-align: center; }
 .welcome h1 { margin: 14px 0 4px; }
@@ -342,7 +348,13 @@ progress::-moz-progress-bar { border-radius: inherit; background: var(--accent);
 .editor-column { min-width: 0; min-height: 0; display: grid; grid-template-rows: minmax(300px, 1fr) 98px; background: var(--surface); }
 .preview-shell { min-height: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 4px 8px 0; overflow: hidden; }
 .preview-stage { container-type: size; position: relative; height: calc(100% - 40px); width: auto; max-width: 100%; margin: auto; background: #000; overflow: hidden; box-shadow: 0 8px 35px #000a; user-select: none; }
+.preview-stage.short-framing { background: #080a09; }
+.short-frame-guide { container-type: size; position: absolute; z-index: 6; overflow: hidden; border: 2px solid #ff3c45; box-shadow: 0 0 0 1px #260408, 0 0 10px #ff3c4566; pointer-events: none; }
+.short-frame-guide .visual-overlay { pointer-events: auto; }
+.short-frame-rendered { background: #000; }
 .preview-source-video { position: absolute; inset: 0; display: block; width: 100%; height: 100%; object-fit: contain; transform-origin: center; }
+.preview-transition-incoming-layer { position: absolute; inset: 0; }
+.preview-transition-incoming { display: block; width: 100%; height: 100%; object-fit: contain; transform-origin: center; }
 .preview-error { position: absolute; z-index: 10; inset: 0; display: grid; place-items: center; padding: 24px; color: #ffc5c5; background: #210d0dcc; text-align: center; }
 .transport { position: relative; width: 100%; height: 40px; flex: 0 0 40px; display: flex; align-items: center; justify-content: flex-start; gap: 6px; font-variant-numeric: tabular-nums; color: #aab0ba; font-size: 11px; }
 .transport button { padding: 4px 7px; font-size: 11px; }
@@ -369,6 +381,9 @@ progress::-moz-progress-bar { border-radius: inherit; background: var(--accent);
 .resize-handle { position: absolute; width: 13px; height: 13px; min-width: 0; padding: 0; right: -7px; bottom: -7px; border: 2px solid #102018; border-radius: 50%; background: var(--accent); cursor: nwse-resize; }
 
 .timeline-shell { min-height: 0; border-top: 1px solid #292c33; background: #141519; display: flex; flex-direction: column; }
+.editor-column:has(.short-frame-controls) { grid-template-rows: minmax(300px, 1fr) 132px; }
+.short-frame-controls { display: flex; justify-content: center; gap: 6px; padding: 4px 0; }
+.short-frame-controls button { padding: 4px 10px; font-size: 11px; }
 .timeline-scroll { flex: 1; overflow-x: auto; overflow-y: hidden; padding: 4px 8px 8px; }
 .timeline { position: relative; min-width: 100%; height: 86px; background: var(--surface-track); border-radius: 6px; overflow: hidden; }
 .video-track { position: absolute; display: flex; left: 0; right: 0; top: 4px; height: 38px; }
@@ -379,7 +394,8 @@ progress::-moz-progress-bar { border-radius: inherit; background: var(--accent);
 .focus-zoom-range span { position: absolute; top: 3px; left: 2px; padding: 0 3px; border-radius: 2px; background: rgba(7,20,15,.78); color: var(--accent-bright); font-size: 8px; }
 .video-transition-range { position: absolute; z-index: 3; top: 4px; height: 3px; background: #66d8ff; pointer-events: none; }
 .video-transition-range span { position: absolute; top: 3px; left: 2px; padding: 0 3px; border-radius: 2px; background: rgba(7,20,15,.78); color: #9ee8ff; font-size: 8px; }
-.face-blur-range { position: absolute; z-index: 4; top: 8px; height: 3px; min-width: 2px; padding: 0; border: 0; border-radius: 0; appearance: none; background: #ff9b6a; box-shadow: none; cursor: pointer; }
+.short-frame-point { position: absolute; z-index: 4; top: 6px; transform: translateX(-50%); padding: 0 2px; border: 0; background: rgba(30,6,9,.82); color: #ff5d66; font-size: 12px; line-height: 16px; }
+.face-blur-range { position: absolute; z-index: 4; top: 12px; height: 3px; min-width: 2px; padding: 0; border: 0; border-radius: 0; appearance: none; background: #ff9b6a; box-shadow: none; cursor: pointer; }
 .face-blur-range:hover, .face-blur-range:focus-visible, .face-blur-range.selected { background: #ffc09e; box-shadow: 0 0 0 1px var(--accent-bright); }
 .face-blur-range span { position: absolute; top: 3px; left: 2px; padding: 0 3px; border-radius: 2px; background: rgba(30,15,8,.82); color: #ffd1b7; font-size: 8px; white-space: nowrap; }
 .replay-range { position: absolute; z-index: 4; bottom: 0; height: 3px; background: #7fd6ff; pointer-events: none; }
