@@ -1,0 +1,26 @@
+FlashVSR+ attribution and derived-asset notice
+
+FlashVSR+ code and the repository prompt are from OpenImagingLab/FlashVSR_Plus,
+source commit b548a2cc2c929d3d4676f2973abe27876ec4dee7, under the Apache
+License, Version 2.0. The exact license text is distributed as
+LICENSE-FLASHVSR-APACHE.txt.
+
+The external Turbo and Base model files are from
+ruchangyao/FlashVSR_plus, revision 46b79520946ac67dec94d1566490690953c7debc,
+whose pinned model metadata declares Apache-2.0. The model repository does not
+ship a separate license text; retain the model-card URL and revision in
+provenance when downloading or redistributing those files.
+
+The two fixed conditioning binaries in this pack are BF16 values derived from
+authenticated FlashVSR+ model tensors at timestep 1000. They contain no bulk
+checkpoint payload, but they are learned-derived artifacts and are not
+independent structural-only data. Their exact source, conversion, and hashes
+are recorded in NOTICE-FLASHVSR-PROVENANCE.json.
+
+FlashVSR+ identifies Wan-AI/Wan2.1-T2V-1.3B as its base model. Preserve the
+Wan Apache-2.0 license and model-card use guidance when distributing model
+weights or learned-derived artifacts; see
+https://huggingface.co/Wan-AI/Wan2.1-T2V-1.3B and its LICENSE.txt.
+
+This notice grants no trademark rights and does not replace the applicable
+licenses or any third-party notices.

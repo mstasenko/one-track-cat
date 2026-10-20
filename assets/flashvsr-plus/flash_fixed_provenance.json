@@ -1,0 +1,63 @@
+{
+  "schema": 1,
+  "source_commit": "b548a2cc2c929d3d4676f2973abe27876ec4dee7",
+  "model_revision": "46b79520946ac67dec94d1566490690953c7debc",
+  "license": {
+    "spdx": "Apache-2.0",
+    "license_file": "LICENSE-FLASHVSR-APACHE.txt",
+    "license_url": "https://raw.githubusercontent.com/OpenImagingLab/FlashVSR_Plus/b548a2cc2c929d3d4676f2973abe27876ec4dee7/LICENSE",
+    "model_card_url": "https://huggingface.co/ruchangyao/FlashVSR_plus",
+    "model_card_revision_url": "https://huggingface.co/ruchangyao/FlashVSR_plus/resolve/46b79520946ac67dec94d1566490690953c7debc/README.md",
+    "base_model": "Wan-AI/Wan2.1-T2V-1.3B",
+    "base_model_license_url": "https://huggingface.co/Wan-AI/Wan2.1-T2V-1.3B/resolve/main/LICENSE.txt"
+  },
+  "derived_conditioning": {
+    "source_helper": "plus_edges.fixed_conditioning(weights, 'bf16')",
+    "fixed_timestep": 1000.0,
+    "storage": "raw little-endian BF16 words",
+    "bulk_checkpoint_payload_included": false,
+    "learned_derived_values_included": true,
+    "artifacts": [
+      {
+        "mode": "turbo",
+        "path": "flash_fixed_conditioning_bf16_turbo.bin",
+        "bytes": 21504,
+        "sha256": "7d49032ce9f91fdc13d6dba00f22efacb4e91fbdac2e9797a48f34fb7adf915b"
+      },
+      {
+        "mode": "base",
+        "path": "flash_fixed_conditioning_bf16_base.bin",
+        "bytes": 21504,
+        "sha256": "dd78d1930d595a5a58cc9e8f284c4265056b428513350f83f1dead62e67f3d4d"
+      }
+    ]
+  },
+  "prompt": {
+    "source_url": "https://raw.githubusercontent.com/OpenImagingLab/FlashVSR_Plus/b548a2cc2c929d3d4676f2973abe27876ec4dee7/prompt_tensor/posi_prompt.pth",
+    "outer_bytes": 4195504,
+    "outer_sha256": "4601107a11e4e11a936a6b79df579e54dbc99872132bf542151f0ffd65b4b1ef",
+    "raw_bf16_bytes": 4194304,
+    "raw_bf16_sha256": "ae3fbad78e1bc23148d736d95fa269517d76ecf21dc2ff17ba63a54f6cafd3e9",
+    "shape": [1, 512, 4096]
+  },
+  "source_files": [
+    {
+      "path": "openvino/full_runtime/plus_edges.py",
+      "bytes": 17964,
+      "sha256": "83353b9b60d49952f4d1594a1d65338efb148f084d4e61642e346ecf38c0c917"
+    },
+    {
+      "path": "openvino/full_runtime/plus_modes.py",
+      "bytes": 4832,
+      "sha256": "1e2fe526b1dfa639783c3f1b664422963dd089509cc986428b89a9c44d7a4427"
+    },
+    {
+      "path": "openvino/full_runtime/plus_storage.py",
+      "bytes": 2659,
+      "sha256": "d1d8da6265e7aade177d99b4e0ac3e8fc76e6f88a9319654c998be0ed1a1037d"
+    }
+  ],
+  "exporter_sha256": "c460e4ebfbb0891f8dfe70c1517bba8f760aeafcf197464f94feca2fb47e085e",
+  "native_fixed_header_sha256": "7ee0bef59493cac27af09ba9057d5e2a32e11af7639682e31de90ad00d8ab93e",
+  "notice": "The fixed conditioning files are small learned-derived BF16 artifacts; no bulk checkpoint payload is bundled."
+}

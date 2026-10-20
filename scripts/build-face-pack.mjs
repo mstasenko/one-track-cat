@@ -6,6 +6,7 @@ import {
 } from 'node:fs'
 import { basename, dirname, extname, join, resolve } from 'node:path'
 import AdmZip from 'adm-zip'
+import { openVinoLauncher } from './openvino-launcher.mjs'
 
 const projectRoot = resolve(import.meta.dirname, '..')
 const distRoot = join(projectRoot, 'dist')
@@ -289,7 +290,7 @@ function sourceManifest() {
 }
 
 function writeLauncher(outputRoot) {
-  const launcher = '#!/bin/sh\nset -eu\npack_root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)\nexport OPENVINO_LIB_PATH="$pack_root/lib"\nexport LD_LIBRARY_PATH="$pack_root/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"\nexport CUDA_VISIBLE_DEVICES=""\nif [ -n "${PKEXEC_UID:-}" ]; then\n  export NEO_CACHE_PERSISTENT=0\nfi\nexec "$pack_root/otc-face-blur.bin" "$@"\n'
+  const launcher = openVinoLauncher('otc-face-blur.bin')
   writeFileSync(join(outputRoot, 'otc-face-blur'), launcher, { mode: 0o755 }); chmodSync(join(outputRoot, 'otc-face-blur'), 0o755)
 }
 

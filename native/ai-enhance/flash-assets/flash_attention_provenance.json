@@ -1,0 +1,243 @@
+{
+  "schema": 1,
+  "role": "shared direct, precise-cross, and split-4 BF16 attention",
+  "historical_split_source": {
+    "kernel": "evidence/attention_splitkey_20261017.cl",
+    "kernel_sha256": "7c0f81254adaa8d2363e0a5eba3e32c01eaf0fa5c28e9f09ed92b3b2e1269f08",
+    "config": "evidence/attention_splitkey_20261017.xml",
+    "config_sha256": "364d6856031f0c8e5691ad51fd2764de87cc7736285ecab0aaff83fb5fcf1740"
+  },
+  "adaptation": "One shared source implements direct, precise-cross, and split partial/merge. Devices exposing Intel 2D block I/O retain the canonical SIMD16 path. Capability-admitted scalar subgroup devices use the reviewed packed K/V path with the 128-work-item DG2 split geometry; the canonical XML remains unchanged. The source retains the historical OTC_A770_SG8 macro spelling for exact-source provenance; selection is based on absence of cl_intel_subgroup_2d_block_io, not a product-name claim. Both paths retain the same raw-BF16/FP32 partial ABI. The reviewed geometry and measurements are scoped to the tested Intel Gen12 A770; no other-device qualification is implied.",
+  "assets": {
+    "bf16_cross_bridge_custom_layers.xml": {
+      "bytes": 2294,
+      "sha256": "6560e4092de74c1e167b54f535458a4ac771991c3a6e1626fc0ac4dc8535fda6"
+    },
+    "bf16_cross_bridge_20261017.cl": {
+      "bytes": 6066,
+      "sha256": "d3369ccf989e292c062e9e568e1b1d2c44e7fc84b6d074ed048be65f9a428aac"
+    },
+    "plus_sparse_xmx.cl": {
+      "bytes": 34017,
+      "sha256": "5062adc6e4810d5c203334149d088b4bca64aa7f5a5b5757f348eed3de546b8d"
+    },
+    "plus_split_key.xml": {
+      "bytes": 1272,
+      "sha256": "56ea1ebe718ab3e22122118729e7bf0874b20bb4e12a23160f529c93d6b34d84"
+    },
+    "plus_split_key_dg2.xml": {
+      "bytes": 1270,
+      "sha256": "1ddc0bf1fde271d3173b750316b61008a9fcf51be7328c689c05be5f4e9b44b4"
+    }
+  },
+  "binary_prefix_candidate": {
+    "macro": "OTC_BINARY_PREFIX",
+    "scope": "split partial only",
+    "precondition": "packed IDs are a contiguous nonnegative prefix followed by -1",
+    "qualification": "Historical A770 independent CPU-reference GPU gate passed for empty, full, odd and partition-boundary prefixes. Linear/binary output and FP32 partial buffers match byte-for-byte at H12/Q16/K256, prefixes32/128; event timing was effectively neutral at these prefix lengths. The shared repeat-eight/binary-prefix source also completed matched Turbo and Base full-worker runs with byte-identical baseline outputs."
+  },
+  "precision": "BF16 words through F16-shaped transport; FP32 partial accumulators; no numeric FP16 conversion",
+  "historical_qualification": {
+    "a770": "Historical pre-packing source eef7a585e37c4277d764fbe5f62110a012d68b02db0be4e852c722edc75738c2 passed the independent CPU-reference raw OpenCL gate: direct and split-merge outputs match exactly, including empty/full/odd prefixes, empty split partitions, nonzero offsets, unchanged inputs and canaries. Precise-cross maximum absolute difference is 0.00048828125 (one BF16 step); it is not bit-exact. A770 split-partial repeat-eight also matches the prior repeat-four FP32 partial/final output bytes at H12/Q16/K256 with selected prefixes32/128; event partial time improved approximately37 percent, not a full-worker throughput claim.",
+    "a770_full_worker": {
+      "turbo": "Repeat-eight source eef7a585, worker2c1735e8, completed the matched45-frame1280x720 to3840x2160 spatial run in487.78s (10.8396s/source frame), versus repeat-four workerb3d77238 at597.03s (13.2673s/frame):18.3percent less wall time. Whole1,119,744,000byte output SHA2566a7648efa05cf0f965fd4976a252f447db2130b5751ef36c22077530643256b9 is byte-identical to the baseline's45unique frames. Empty scratch, no OOM/swap/newGPU faults, no competing workload observed. Same-capped B580 repeat-four baseline completed243.24s (5.4053s/frame). Process wall includes initialization/compile and resizing/writes, excludes source decode/RIFE/encoding;10GiB RAM, zero swap, CPU400percent, Tasks1024. The later LOW queue-throttle policy was not in this full-worker binary; no full-worker speed claim is made for that policy. Historical warm research clocks are separate.",
+      "base": "Repeat-eight source eef7a585, worker2c1735e8, completed the matched45-frame1280x720 to3840x2160 spatial run in1322.86s (29.3969s/source frame), versus repeat-four A7701959.24s (43.5387s/frame):32.5percent less wall time. Whole1,119,744,000byte output SHA25629dbb3b66a0a5b2d5013d729244bd8debd31a72ef363bf2e558ea451f869b99b is byte-identical to baseline. Empty scratch, no OOM/swap/newGPU faults and no competing workload observed during the candidate. Cgroup memory reached its10GiB cap (memory.events max102038), with substantial I/O pressure; maximum process RSS6655108KiB. These capped process-wall timings include initialization/compile, resizing and disk writes, not pure GPU execution, and exclude decode/RIFE/encoding. Later LOW queue-throttle policy was not included. The prior A770 baseline has an ownership-observation gap after12:20PDT. Same-capped B580 baseline completed412.68s (9.1707s/frame)."
+    },
+    "b580": "Historical pre-packing shared-source finite raw OpenCL numerical gate passed: direct and split-merge outputs match the independent CPU reference exactly, including empty splits, nonzero offsets, canaries and unchanged inputs. Precise-cross maximum absolute difference is 0.00048828125 (one BF16 step); it is not bit-exact. No new GPU faults. This is not a full-worker throughput measurement; historical resident clocks apply only to their previous measured sources.",
+    "b580_receipt_sha256": "d0b1479fb09f8f1971c1ff79f320fafeae054510bef48c0e1bfcffd01c9cf3f2",
+    "runtime": "2026.5.0-23457-7d81aad55a5",
+    "a770_opencl_driver": "26.22.38646.7",
+    "evidence": "External OTC msh-a770-20261018/a770-numerical-gate and b580-shared-source-gate; no private media or generated GPU artifacts are redistributed."
+  },
+  "historical_matched_native_qualification": {
+    "source_sha256": "2ce450c906148c3127a3c60ae52abc2b96825b86fd207eaf42a71d93da42837c",
+    "config_sha256": "56ea1ebe718ab3e22122118729e7bf0874b20bb4e12a23160f529c93d6b34d84",
+    "worker_sha256": "5a2fe77a03df011d5f142db5aec2b70a088b4665931f869ee1d836ba3aecf630",
+    "runtime": "2026.5.0-23457-7d81aad55a5",
+    "frames": 45,
+    "input_geometry": [
+      1280,
+      720
+    ],
+    "output_geometry": [
+      3840,
+      2160
+    ],
+    "fps": 30,
+    "memory_limit_bytes": 19327352832,
+    "swap_limit_bytes": 0,
+    "cpu_quota_percent": 400,
+    "processing_clock": {
+      "included": [
+        "LQ projection",
+        "DiT",
+        "VAE decode and RGB conversion",
+        "per-call weight refills",
+        "recurring phase compilation",
+        "history IO",
+        "finite checks"
+      ],
+      "excluded": [
+        "initial ensureSessions setup/startup",
+        "source read/resize",
+        "RIFE",
+        "output writes",
+        "teardown"
+      ],
+      "method": "sum of disjoint process:* timers; nested infer/compile/history timers are not additive"
+    },
+    "a770": {
+      "turbo": {
+        "processing_seconds": 354.812324642,
+        "seconds_per_frame": 7.884718325377778,
+        "output_sha256": "6a7648efa05cf0f965fd4976a252f447db2130b5751ef36c22077530643256b9"
+      },
+      "base": {
+        "processing_seconds": 759.089172214,
+        "seconds_per_frame": 16.86864827142222,
+        "output_sha256": "29dbb3b66a0a5b2d5013d729244bd8debd31a72ef363bf2e558ea451f869b99b"
+      }
+    },
+    "b580": {
+      "turbo": {
+        "processing_seconds": 211.99863783,
+        "seconds_per_frame": 4.711080840666667,
+        "output_sha256": "b011071d5d3a349a8e5c5b922035e898482f177080a4b90bf90e099524ec7930"
+      }
+    },
+    "correctness": "Each complete 1,119,744,000-byte output is byte-identical to its same-device/mode canonical baseline. All workers exited naturally; no OOM, swap, new GPU faults or remaining scratch. Device parity is not claimed.",
+    "scope": "Measured historical trial worker with cache-only timers and default queue throttle, not end-to-end editor export or a performance qualification of the later LOW-throttle policy. Earlier resident research clocks have a different scope. This historical comparison is not a current target or limitation proof.",
+    "evidence": "External OTC msh-a770-20261018/packed-runtime/{shared-base45-completed,shared-turbo45-completed} and b580-shared-packed45-turbo-completed; private media and generated artifacts are not redistributed."
+  },
+  "matched_native_qualification": {
+    "status": "historical; superseded by accepted_a770_1050",
+    "candidate": "A770 packed-cross C worker",
+    "source_sha256": "35ac8e941cb837f8b4f8ed493a1d04a90eab24a5b3ef26a9f25c326511d60b30",
+    "bridge_sha256": "d3369ccf989e292c062e9e568e1b1d2c44e7fc84b6d074ed048be65f9a428aac",
+    "config_sha256": "6560e4092de74c1e167b54f535458a4ac771991c3a6e1626fc0ac4dc8535fda6",
+    "split_config_sha256": "56ea1ebe718ab3e22122118729e7bf0874b20bb4e12a23160f529c93d6b34d84",
+    "worker_sha256": "c79ded483f82829285528acf8d961b14125ba04c431c25f80aa0cc3bfea69f75",
+    "runtime": "2026.5.0-23457-7d81aad55a5",
+    "frames": 45,
+    "input_geometry": [
+      1280,
+      720
+    ],
+    "output_geometry": [
+      3840,
+      2160
+    ],
+    "fps": 30,
+    "a770": {
+      "turbo": {
+        "processing_seconds": 348.58577653,
+        "seconds_per_frame": 7.74635059,
+        "output_sha256": "6a7648efa05cf0f965fd4976a252f447db2130b5751ef36c22077530643256b9"
+      },
+      "base": {
+        "processing_seconds": 752.716790908,
+        "seconds_per_frame": 16.727039798,
+        "output_sha256": "29dbb3b66a0a5b2d5013d729244bd8debd31a72ef363bf2e558ea451f869b99b"
+      }
+    },
+    "correctness": "Each complete 1,119,744,000-byte Turbo and Base output was byte-identical to its same-mode canonical baseline.",
+    "base_run": {
+      "wall_seconds": 780.95,
+      "max_rss_kib": 6467924,
+      "oom_kills": 0,
+      "swap_bytes": 0,
+      "scratch": "empty",
+      "gpu_faults": "none"
+    },
+    "b580": {
+      "status": "The C packed-cross source was not rerun on B580; no packed-B580 GPU-binary qualification is claimed.",
+      "canonical_context": "The canonical 13 preprocessed-token proof is a token/graph proof, not a B580 device-binary qualification.",
+      "canonical_turbo_seconds_per_frame": 4.711080841,
+      "canonical_turbo_source_sha256": "2ce450c906148c3127a3c60ae52abc2b96825b86fd207eaf42a71d93da42837c",
+      "canonical_base_seconds_per_frame": 8.437467998,
+      "canonical_base_source_sha256": "eef7a585e37c4277d764fbe5f62110a012d68b02db0be4e852c722edc75738c"
+    },
+    "performance_claim": "No 20% target or limitation claim is made.",
+    "receipts": [
+      "OTC msh-a770-20261018/packed-runtime/cross-turbo45-completed",
+      "OTC msh-a770-20261018/packed-runtime/cross-base45-completed"
+    ]
+  },
+  "accepted_a770_1050": {
+    "status": "accepted A770 vectorcache-shared-source 20261019.1050 variant full-worker result",
+    "source_sha256": "65a557d9d0124520d260dfbfd6fd05e802aad54f8aaa659fc7463b2268b5327d",
+    "source_bytes": 33942,
+    "shipped_source_sha256": "5062adc6e4810d5c203334149d088b4bca64aa7f5a5b5757f348eed3de546b8d",
+    "shipped_source_bytes": 34017,
+    "shipped_source_note": "The checked-in source differs from the accepted worker source only in comments: the cache-only trial banner and product-name wording were removed, capability-based selection was stated explicitly, and the canonical 16-work-item versus scalar-subgroup split-partial 128-work-item geometry was stated accurately; kernel logic is unchanged.",
+    "dg2_config_sha256": "1ddc0bf1fde271d3173b750316b61008a9fcf51be7328c689c05be5f4e9b44b4",
+    "dg2_config_bytes": 1270,
+    "canonical_config_sha256": "56ea1ebe718ab3e22122118729e7bf0874b20bb4e12a23160f529c93d6b34d84",
+    "canonical_config_bytes": 1272,
+    "geometry": {
+      "queries_per_subgroup": 8,
+      "subgroup_size": 8,
+      "work_group": [
+        128,
+        1,
+        1
+      ],
+      "slm_bytes": 49152,
+      "slm_breakdown_bytes": {
+        "k_cache": 8192,
+        "v_cache": 8192,
+        "q_cache": 32768,
+        "kv_total": 16384
+      },
+      "grf": 256,
+      "spill": false,
+      "metadata_workaround": "long4 dimensions and pitches for A770 SG8 JIT compound-literal metadata"
+    },
+    "worker_sha256": "9a53e0e8dcb3eed5afc2cc3d161e7599514607dd3dc0ecc86d28e7b373ae0045",
+    "patched_plugin_sha256": "76f189d18c38760ee2cfb7b32fc507cb06cbdde7e66554103203cb2261dc46d8",
+    "runtime": "2026.5.0-23457-7d81aad55a5",
+    "frames": 45,
+    "input_geometry": [
+      1280,
+      720
+    ],
+    "output_geometry": [
+      3840,
+      2160
+    ],
+    "fps": 30,
+    "turbo": {
+      "processing_seconds": 248.901700135,
+      "seconds_per_frame": 5.531148891888889,
+      "output_sha256": "6a7648efa05cf0f965fd4976a252f447db2130b5751ef36c22077530643256b9"
+    },
+    "base": {
+      "processing_seconds": 450.278758833,
+      "seconds_per_frame": 10.006194640733334,
+      "output_sha256": "29dbb3b66a0a5b2d5013d729244bd8debd31a72ef363bf2e558ea451f869b99b"
+    },
+    "correctness": "Both complete 1,119,744,000-byte A770 outputs were byte-identical to their same-mode canonical baselines; natural exit, OOM=0, swap=0, scratch empty, and no new GPU fault were observed.",
+    "requirements": "The full-worker result requires the compiled model cache and the exact patched OpenVINO GPU plugin above.",
+    "product_scope": "This is an accepted Intel Gen12 A770 qualification receipt, not a current installed-app, shipped-pack, or product-throughput claim. No other-device or B580 qualification is claimed."
+  },
+  "host_admission": {
+    "policy": "One shared flashUsesPackedKv helper uses OpenVINO uarch_version prefix 12. for the reviewed Gen12 packing and workgroup geometry.",
+    "kernel_policy": "The kernel compiler selects scalar SG8 when cl_intel_subgroup_2d_block_io is absent; no product-name matching is used.",
+    "limit": "The host architecture proxy and kernel feature choice agree on qualified A770/B580 hardware; this is not a general runtime OpenCL-extension probe or arbitrary-GPU qualification."
+  },
+  "source_consolidation": {
+    "preprocessed_token_comparisons": 50,
+    "accepted_vs_shipped": {
+      "b580_native_init": 10,
+      "scalar_native_init": 10,
+      "scalar_public_no_init": 10,
+      "scalar_automatic_capability": 10
+    },
+    "prior_product_vs_shipped": {
+      "b580_native_init": 10,
+      "prior_source_sha256": "35ac8e941cb837f8b4f8ed493a1d04a90eab24a5b3ef26a9f25c326511d60b30"
+    },
+    "method": "cpp -E -P -undef, identical token lists over direct/cross/partial/merge and packed/binary-prefix cases",
+    "limit": "CPU preprocessing only; not generated ISA, GPU numerical execution, or throughput qualification"
+  }
+}

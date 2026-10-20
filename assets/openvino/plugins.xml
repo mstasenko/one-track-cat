@@ -1,0 +1,6 @@
+<ie>
+  <plugins>
+    <plugin name="CPU" location="libopenvino_intel_cpu_plugin.so"/>
+    <plugin name="GPU" location="libopenvino_intel_gpu_plugin.so"/>
+  </plugins>
+</ie>

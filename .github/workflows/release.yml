@@ -12,7 +12,7 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-26.04
-    timeout-minutes: 60
+    timeout-minutes: 120
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
@@ -28,10 +28,10 @@ jobs:
       - name: Install GNOME Wayland runtime and dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install --yes gnome-shell libgbm1 libgtk-3-0 libnss3 libasound2t64
+          sudo apt-get install --yes gnome-shell libgbm1 libgtk-3-0 libnss3 libasound2t64 cmake g++ p7zip-full zlib1g libzstd1 ninja-build patchelf pkg-config ocl-icd-opencl-dev
           npm install --global npm@11.18.0
 
-      - name: Set up build-only Python for the optional face model
+      - name: Set up build-only Python for the native AI pack recipe
         uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
         with:
           python-version: 3.11.15
@@ -47,6 +47,15 @@ jobs:
           otc_CPU_ONLY=1 otc_FACE_PACK_TEST=1 \
             otc_FACE_FIXTURE_PATH="$PWD/dist/face-pack-cache/fixtures/large.ppm" \
             npx vitest run src/main/face-export-real.test.ts
+          # Bound the source compiler and its children; keep artifacts runner-owned.
+          sudo systemd-run --wait --pipe --collect \
+            --uid="$(id -u)" --gid="$(id -g)" --working-directory="$PWD" \
+            --property=MemoryMax=6G --property=MemorySwapMax=0 \
+            --setenv=PATH="$PATH" npm run build:ai-pack
+          otc_CPU_ONLY=1 npm run verify:ai-pack
+          # No learned checkpoints or whole-4K CPU restoration in small-pack CI.
+          # Full Electron/FFmpeg spatial/audio/metadata coverage is qualified separately.
+          otc_CPU_ONLY=1 node scripts/smoke-ai-pack.mjs
           cd release
           sha256sum ./*.AppImage ./*.zip > SHA256SUMS
 

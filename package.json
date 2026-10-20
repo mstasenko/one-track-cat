@@ -35,7 +35,8 @@
     "package": "npm run build:meme-pack && npm run build:ffmpeg && npm run build && electron-builder --linux AppImage --publish never && node scripts/place-meme-pack.mjs",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
-    "test": "npm run lint && npm run typecheck && npm run test:vitest && node scripts/build-meme-pack.mjs --quiet && node scripts/verify-meme-pack.mjs && npm run test:e2e",
+    "test": "npm run lint && npm run typecheck && npm run test:vitest && npm run test:ai-recipes && node scripts/build-meme-pack.mjs --quiet && node scripts/verify-meme-pack.mjs && npm run test:e2e",
+    "test:ai-recipes": "python3 scripts/test_prepare_ai_pack.py && python3 scripts/test_build_openvino_gpu.py",
     "verify:ci": "npm install && npm audit --audit-level=high && npm test",
     "test:vitest": "vitest run --coverage && node scripts/quality.mjs",
     "test:e2e": "electron-vite build --logLevel error && node scripts/run-headless-wayland.mjs node_modules/.bin/playwright test",
@@ -45,7 +46,9 @@
     "build:meme-pack": "node scripts/build-meme-pack.mjs",
     "build:ffmpeg": "node scripts/build-ffmpeg.mjs",
     "build:face-pack": "node scripts/build-face-pack.mjs",
-    "verify:face-pack": "node scripts/verify-face-pack.mjs"
+    "verify:face-pack": "node scripts/verify-face-pack.mjs",
+    "build:ai-pack": "node scripts/build-ai-pack.mjs",
+    "verify:ai-pack": "node scripts/verify-ai-pack.mjs"
   },
   "dependencies": {
     "@fontsource/anton": "5.2.7",

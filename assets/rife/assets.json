@@ -1,0 +1,79 @@
+{
+  "rife-ir.zip": {
+    "bytes": 21210600,
+    "sha256": "912fea8a9a405799cbe122605da12d6e4b5330aec83a0e026910651cb34d39fa",
+    "files": [
+      {
+        "path": "rife.bin",
+        "bytes": 22643376,
+        "sha256": "c166cc6df78e76a50950c26988c64c30dc33e1e5867a3ebcb4cb4e630a8afaa9"
+      },
+      {
+        "path": "rife.xml",
+        "bytes": 335754,
+        "sha256": "7b5e8df0dc32b206569b81c1e69a65269ece571420005a989679dd523f8d0fe3"
+      }
+    ]
+  },
+  "notices.zip": {
+    "bytes": 64876,
+    "sha256": "21b9b99d79af32fe66800fc68efb104367e1e93bf4092b6e6395eed4b48d5578",
+    "files": [
+      {
+        "path": "LICENSE-ONE-TRACK-CAT.txt",
+        "bytes": 35149,
+        "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+      },
+      {
+        "path": "LICENSE-OPENSSL.txt",
+        "bytes": 11358,
+        "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+      },
+      {
+        "path": "LICENSE-OPENVINO.txt",
+        "bytes": 11357,
+        "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+      },
+      {
+        "path": "LICENSE-RIFE-MIT.txt",
+        "bytes": 1066,
+        "sha256": "f629619f078e3ed699f1ea401248cb7796c36334e3b8ec0eb2c082eceaa5f084"
+      },
+      {
+        "path": "LICENSE-SEEDVR2.txt",
+        "bytes": 11334,
+        "sha256": "5967a0c153e731109b76c5d83b5e0fae2382b6aaf7b898d08ff03702eea59430"
+      },
+      {
+        "path": "NOTICE-AI-MODELS.txt",
+        "bytes": 1088,
+        "sha256": "3781ef596567bc46ef8cc1341e4c071c43590ce419fc1c02ef21b4a271a6d6f1"
+      },
+      {
+        "path": "NOTICE-OPENSSL-UBUNTU.txt",
+        "bytes": 2543,
+        "sha256": "6a7da622fe0637a334d2a8fc470852d2ffb77d9a2b2f930f854e32a41ad6ef35"
+      },
+      {
+        "path": "NOTICE-OPENVINO-ONEDNN.txt",
+        "bytes": 28475,
+        "sha256": "f1b16991dfe8488f3f5f07cccba575c31c91175a9f2c8d9e1569665f86e0b2f6"
+      },
+      {
+        "path": "NOTICE-OPENVINO-RUNTIME.txt",
+        "bytes": 99330,
+        "sha256": "85481d0f8a01308fb8c837e0007897ab5f35c90b6ee6333e6e6dfeff4ca3f46c"
+      },
+      {
+        "path": "NOTICE-OPENVINO-TBB.txt",
+        "bytes": 46979,
+        "sha256": "b10997cc50652ba6ab365e3bc43e13057681cd4a56533b46171529bd249749f3"
+      },
+      {
+        "path": "NOTICE-SEEDVR2-RIFE.txt",
+        "bytes": 370,
+        "sha256": "4653e9be3ebcd4038cc772600510ac05fdb04eff077ef759e1e55a720924a772"
+      }
+    ]
+  }
+}
