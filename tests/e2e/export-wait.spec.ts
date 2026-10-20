@@ -3,7 +3,7 @@ import type { ElectronApplication } from '@playwright/test'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { click, dismissHardwareWarningIfNeeded, e2eEnvironment, main, syntheticVideo } from './support'
+import { click, dismissHardwareWarningIfNeeded, e2eEnvironment, main, startExport, syntheticVideo } from './support'
 
 function animationNames(element: Element): string[] {
   const elements = [element, ...Array.from(element.querySelectorAll('*'))]
@@ -59,7 +59,7 @@ test('shows a cancellable export wait animation and honors reduced motion', asyn
       })
     })
 
-    await click(page.getByRole('button', { name: 'Export', exact: true }))
+    await startExport(page)
     const dialog = page.getByRole('dialog', { name: 'Exporting video' })
     await expect(dialog).toBeVisible()
     const track = dialog.locator('.export-progress-track')

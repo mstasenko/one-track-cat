@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { mkdir, mkdtemp, rename, rm } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
+import { focusZoomTransitionDuration, smoothstepExpression } from '../focus-zoom'
 import type { ExportRequest, Overlay, SourceSegment, VisualOverlayBase } from '../types'
 import { exportEncoders, integratedDecodeDevice, softwareEncoder } from './export-encoder'
 import { ensureDiskSpace, ensureFaceExportDiskSpace } from './export-space'
@@ -17,7 +18,10 @@ import { clippedFaceRequest, previewFilterGraph, type PreviewRange } from './pre
 import { applyPreviewSeek, prepareTimelineInputs, preparePreviewSeek, type PreviewSeekPlan } from './preview-seek'
 import { addVideoRangeTransitionFilters } from './video-range-transition'
 import { frameAlphaFilter } from './frame-alpha'
+import { requireAiPack } from './ai-pack'
+import { encodeWithAi, type AiExportContext } from './ai-export'
 import { isShortCanvas, shortFramePositionExpression } from '../short-frame'
+import { aiEnhancementPlan, flashSpatialSupportMessage, isFlashSpatialSupported } from '../ai-enhancement'
 import { overlayInputArgs } from './export-inputs'
 export { loopsInput } from './export-inputs'
 
@@ -44,11 +48,11 @@ function focusZoomExpression(request: ExportRequest): { zoom: string; x: string;
   let y = '0'
   for (const effect of [...effects].reverse()) {
     const end = effect.start + effect.duration
-    const ramp = Math.min(0.18, effect.duration / 3)
+    const ramp = focusZoomTransitionDuration(effect)
     const local = `((${time})-${seconds(effect.start)})`
-    const easedIn = `pow(min(1,max(0,${local}/${seconds(ramp)})),2)*(3-2*min(1,max(0,${local}/${seconds(ramp)})))`
-    const easedOut = `pow(min(1,max(0,(${seconds(end)}-(${time}))/${seconds(ramp)})),2)*(3-2*min(1,max(0,(${seconds(end)}-(${time}))/${seconds(ramp)})))`
-    const activeZoom = `(1+${effect.zoom - 1}*min(${easedIn},${easedOut}))`
+    const easedIn = smoothstepExpression(`${local}/${seconds(ramp)}`)
+    const easedOut = smoothstepExpression(`(${local}-${seconds(effect.duration - ramp)})/${seconds(ramp)}`)
+    const activeZoom = `(1+${effect.zoom - 1}*${easedIn}*(1-${easedOut}))`
     const active = `between(${time},${seconds(effect.start)},${seconds(end)})`
     zoom = `if(${active},${activeZoom},${zoom})`
     x = `if(${active},max(0,min(iw-iw/zoom,${effect.focusX}*iw-iw/(2*zoom))),${x})`
@@ -348,6 +352,14 @@ function addVisualFilters(filters: string[], inputs: PreparedInput[], request: E
 
 export async function exportVideo(request: ExportRequest, range?: PreviewRange): Promise<void> {
   if (request.segments.length === 0) throw new Error('The timeline is empty')
+  let aiContext: AiExportContext | undefined
+  if (request.aiEnhance) {
+    if (range) throw new Error('AI enhancement applies to the whole export, not a preview range')
+    const plan = aiEnhancementPlan(request.canvas, request.aiEnhance.mode, request.focusZooms, request)
+    if (!isFlashSpatialSupported(plan)) throw new Error(flashSpatialSupportMessage)
+    const pack = await requireAiPack({ spatial: plan.spatial, ...(plan.spatial ? { mode: plan.mode } : {}) })
+    aiContext = { plan, pack }
+  }
   const outputDirectory = dirname(request.outputPath)
   await mkdir(outputDirectory, { recursive: true })
   await ensureDiskSpace(request)
@@ -357,11 +369,11 @@ export async function exportVideo(request: ExportRequest, range?: PreviewRange):
   const jobId = randomUUID()
 
   try {
-    const reused = range ? false : await tryReuseFacePreview(request, temporaryOutput, jobId, duration)
+    const reused = range || request.aiEnhance ? false : await tryReuseFacePreview(request, temporaryOutput, jobId, duration)
     if (!reused) {
       const workerRequest = clippedFaceRequest(request, range)
-      if (workerRequest.faceBlurs?.length) await ensureFaceExportDiskSpace(request, temporaryDirectory)
-      await encodeVideo(request, temporaryDirectory, temporaryOutput, duration, jobId, range)
+      if (request.aiEnhance || workerRequest.faceBlurs?.length) await ensureFaceExportDiskSpace(request, temporaryDirectory)
+      await encodeVideo(request, temporaryDirectory, temporaryOutput, duration, jobId, range, aiContext)
     }
     await rename(temporaryOutput, request.outputPath)
   } catch (error) {
@@ -412,10 +424,18 @@ async function encodeVideo(
   output: string,
   duration: number,
   jobId: string,
-  range?: PreviewRange
+  range?: PreviewRange,
+  aiContext?: AiExportContext
 ): Promise<void> {
+  if (request.aiEnhance && !aiContext) {
+    throw new Error('AI enhancement context is missing')
+  }
   const { inputArgs, preparedInputs, graphRequest, seek } = await prepareInputs(request, directory, range)
   const filter = previewFilterGraph(applyPreviewSeek(buildFilterGraph(graphRequest, preparedInputs), seek), range)
+  if (aiContext) {
+    await encodeWithAi(request, inputArgs, filter, directory, output, duration, jobId, aiContext)
+    return
+  }
   const workerRequest = clippedFaceRequest(request, range)
   if (workerRequest.faceBlurs?.length) {
     const faceContext = { sourceRequest: request, frameOffset: Math.round((range?.[0] ?? 0) * request.canvas.fps), preparationStart: seek?.offset ?? 0 }

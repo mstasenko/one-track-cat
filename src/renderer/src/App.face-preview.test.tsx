@@ -85,6 +85,7 @@ function bridge(): void {
       getDroppedPath: vi.fn().mockResolvedValue('/dropped.mp4'),
       chooseExportPath: vi.fn().mockResolvedValue('/exported.mp4'),
       exportVideo: vi.fn().mockResolvedValue(undefined),
+      aiPackStatus: vi.fn().mockResolvedValue({ available: true, message: 'ready' }),
       getSvgDataUrl: vi.fn().mockResolvedValue('svg')
     }
   })

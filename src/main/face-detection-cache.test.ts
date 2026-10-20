@@ -253,6 +253,38 @@ describe('face detection cache sessions', () => {
     await second.cleanup()
   })
 
+  it('reuses raw detections when only hold seconds changes to the maximum', async () => {
+    mocks.snapshot.mockImplementation((value) => Promise.resolve(JSON.stringify(value)))
+    const first = await prepareFaceDetectionCache(request(), 0)
+    await first.onWorkerStderr?.(Readable.from(['RCFACE1 0 0\n']))
+    await first.commit()
+    await first.cleanup()
+
+    const changed = request()
+    const effect = changed.faceBlurs?.[0]
+    if (!effect) throw new Error('expected a face effect')
+    changed.faceBlurs = [{ ...effect, holdSeconds: 2 }]
+    const second = await prepareFaceDetectionCache(changed, 0)
+    expect(second.workerArgs[0]).toBe('--detections-cache')
+    await second.cleanup()
+  })
+
+  it('reuses ordinary face detections regardless of AI enhancement', async () => {
+    mocks.snapshot.mockImplementation((value) => Promise.resolve(JSON.stringify(value)))
+    const first = await prepareFaceDetectionCache(request(), 0)
+    await first.onWorkerStderr?.(Readable.from(['RCFACE1 0 0\n']))
+    await first.commit()
+    await first.cleanup()
+
+    for (const aiEnhance of [{}, undefined]) {
+      const changed = request()
+      if (aiEnhance !== undefined) changed.aiEnhance = aiEnhance
+      const next = await prepareFaceDetectionCache(changed, 0)
+      expect(next.workerArgs[0]).toBe('--detections-cache')
+      await next.cleanup()
+    }
+  })
+
   it('reuses a whole cache when a disjoint detection range is added', async () => {
     mocks.snapshot.mockImplementation((value) => Promise.resolve(JSON.stringify(value)))
     const first = await prepareFaceDetectionCache(request(), 0)
@@ -269,8 +301,23 @@ describe('face detection cache sessions', () => {
     await second.cleanup()
   })
 
+  it('reuses cached rows when the unchanged face sensitivity is zero', async () => {
+    mocks.snapshot.mockImplementation((value) => Promise.resolve(JSON.stringify(value)))
+    const source = request()
+    source.faceBlurs = source.faceBlurs?.map((effect) => ({ ...effect, sensitivity: 0 }))
+    const first = await prepareFaceDetectionCache(source, 0)
+    await first.onWorkerStderr?.(Readable.from(['RCFACE1 0 0\n']))
+    await first.commit()
+    await first.cleanup()
+
+    const next = await prepareFaceDetectionCache(source, 0)
+    expect(next.workerArgs[0]).toBe('--detections-cache')
+    await next.cleanup()
+  })
+
   it.each([
     { label: 'sensitivity', change: { sensitivity: 0.6 } },
+    { label: 'zero sensitivity', change: { sensitivity: 0 } },
     { label: 'detail', change: { detail: 'standard' as const } }
   ])('rejects cached rows when face detection $label changes', async ({ change }) => {
     mocks.snapshot.mockImplementation((value) => Promise.resolve(JSON.stringify(value)))

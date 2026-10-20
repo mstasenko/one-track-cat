@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { click, dismissHardwareWarningIfNeeded, e2eEnvironment, ffmpeg, hover, main, seekTimeline } from './support'
+import { click, dismissHardwareWarningIfNeeded, e2eEnvironment, ffmpeg, hover, main, seekTimeline, startExport } from './support'
 
 type MediaKind = 'image' | 'video'
 
@@ -89,7 +89,7 @@ async function setMediaFade(page: Page): Promise<void> {
 }
 
 async function exportCurrentAnimation(page: Page, output: string): Promise<void> {
-  await click(page.getByRole('button', { name: 'Export', exact: true }))
+  await startExport(page)
   await expect.poll(() => existsSync(output), { timeout: 85_000 }).toBe(true)
   await expect(page.getByRole('button', { name: 'Export', exact: true })).toBeEnabled({ timeout: 85_000 })
 }

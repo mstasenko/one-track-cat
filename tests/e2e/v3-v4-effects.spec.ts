@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { click, dismissHardwareWarningIfNeeded, e2eEnvironment, ffmpeg, hover, main, meanPixelDifference, mediaDuration, seekTimeline, syntheticVideo, videoFrame } from './support'
+import { click, dismissHardwareWarningIfNeeded, e2eEnvironment, ffmpeg, hover, main, meanPixelDifference, mediaDuration, seekTimeline, startExport, syntheticVideo, videoFrame } from './support'
 
 function sound(directory: string): string {
   const path = join(directory, 'boom.wav')
@@ -50,7 +50,7 @@ test('one click inserts, marks, exports, and removes a half-speed Replay', async
     await expect(page.locator('.replay-range')).toContainText('Replay')
     await expect(page.getByRole('button', { name: 'Replay', exact: true })).toBeDisabled()
     await expect(page.getByRole('button', { name: 'Remove Replay', exact: true })).toHaveCount(0)
-    await click(page.getByRole('button', { name: 'Export', exact: true }))
+    await startExport(page)
     await expect(page.getByRole('dialog', { name: 'Exporting video' })).toBeVisible()
     await expect(page.getByRole('button', { name: 'Export', exact: true })).toBeEnabled({ timeout: 60_000 })
     expect(existsSync(output)).toBe(true)
@@ -86,7 +86,7 @@ test('text Pop previews from its start and exports through the local bitmap path
     await click(page.getByRole('button', { name: 'Preview text animation' }))
     await expect(page.getByRole('button', { name: 'Pause' })).toBeVisible()
     await expect(page.locator('.preview-text')).toHaveCSS('font-weight', '700')
-    await click(page.getByRole('button', { name: 'Export', exact: true }))
+    await startExport(page)
     await expect(page.getByRole('dialog', { name: 'Exporting video' })).toBeVisible()
     await expect(page.getByRole('button', { name: 'Export', exact: true })).toBeEnabled({ timeout: 60_000 })
     expect(existsSync(output)).toBe(true)
@@ -95,7 +95,7 @@ test('text Pop previews from its start and exports through the local bitmap path
     await animation.selectOption('fade')
     await page.getByRole('spinbutton', { name: 'Visual fade in' }).fill('0.4')
     await page.getByRole('spinbutton', { name: 'Visual fade out' }).fill('0.6')
-    await click(page.getByRole('button', { name: 'Export', exact: true }))
+    await startExport(page)
     await expect(page.getByRole('dialog', { name: 'Exporting video' })).toBeVisible()
     await expect(page.getByRole('button', { name: 'Export', exact: true })).toBeEnabled({ timeout: 60_000 })
     expect(meanPixelDifference(videoFrame(output, 0.02), videoFrame(output, 1))).toBeGreaterThan(0.2)
@@ -129,7 +129,7 @@ test('audio controls preserve 200 percent volume without native-volume errors', 
     await page.waitForTimeout(400)
     await expect.poll(() => page.locator('.preview-stage audio').evaluate((media) => (media as HTMLMediaElement).volume)).toBeLessThanOrEqual(1)
     expect(errors).toEqual([])
-    await click(page.getByRole('button', { name: 'Export', exact: true }))
+    await startExport(page)
     await expect(page.getByRole('dialog', { name: 'Exporting video' })).toBeVisible()
     await expect(page.getByRole('button', { name: 'Export', exact: true })).toBeEnabled({ timeout: 60_000 })
     expect(existsSync(output)).toBe(true)

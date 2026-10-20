@@ -1,8 +1,10 @@
 import { basename } from 'node:path'
+import { focusZoomMaxTransitionDuration, focusZoomMinTransitionDuration } from '../focus-zoom'
 import { record, text, identifier, number, boolean, oneOf, validateUniqueIds, type UnknownRecord } from './validation-values'
 import { parseShortFraming } from './short-frame-validation'
 import {
   audioFadeDurations,
+  type AiEnhancementOptions,
   faceBlurMaxEffects,
   faceBlurMaxHoldSeconds,
   focusZoomAmounts,
@@ -24,12 +26,25 @@ import type {
   SavedSession,
   SavedSessionSnapshot,
   SourceSegment,
-  VideoSpeed,
-  VideoTransition,
-  VideoRangeTransition
+  VideoSpeed, VideoTransition, VideoRangeTransition
 } from '../types'
 import { timelineDuration } from '../segment-time'
 import { fitVideoRangeTransition } from '../video-range-transition'
+
+export function parseAiEnhancementMode(value: unknown): AiEnhancementOptions['mode'] {
+  return value === undefined ? undefined : oneOf(value, ['turbo', 'base'] as const, 'AI enhancement mode')
+}
+
+function parseAiEnhancement(value: unknown): AiEnhancementOptions {
+  const input = record(value, 'AI enhancement')
+  const unknown = Object.keys(input).find((key) => key !== 'mode')
+  if (unknown) throw new Error(`AI enhancement field ${unknown} is not supported`)
+  if (Object.prototype.hasOwnProperty.call(input, 'mode') && input.mode === undefined) {
+    throw new Error('AI enhancement mode is not supported')
+  }
+  const mode = parseAiEnhancementMode(input.mode)
+  return mode === undefined ? {} : { mode }
+}
 
 
 function optionalNumberPreset(value: unknown, values: readonly number[], label: string): void {
@@ -343,6 +358,7 @@ export function parseExportRequest(value: unknown): ExportRequest {
     ...(input.focusZooms === undefined ? {} : { focusZooms }),
     ...(shortFramePoints === undefined ? {} : { shortFramePoints }),
     ...(input.faceBlurs === undefined ? {} : { faceBlurs }),
+    ...(input.aiEnhance === undefined ? {} : { aiEnhance: parseAiEnhancement(input.aiEnhance) }),
     ...(input.videoTransitions === undefined ? {} : { videoTransitions })
   }
 }
@@ -388,9 +404,13 @@ function parseFocusZooms(value: unknown, duration: number): FocusZoomEffect[] {
     const input = record(item, 'Focus zoom')
     const start = number(input.start, 'Focus zoom start', 0, duration)
     const effectDuration = number(input.duration, 'Focus zoom duration', 0.001, duration)
+    const transitionDuration = input.transitionDuration === undefined ? undefined
+      : number(input.transitionDuration, 'Focus zoom transition duration', focusZoomMinTransitionDuration, focusZoomMaxTransitionDuration)
     if (start + effectDuration > duration + 0.0001) throw new Error('Focus zoom extends past the timeline')
     if (typeof input.zoom !== 'number' || !focusZoomAmounts.includes(input.zoom as typeof focusZoomAmounts[number])) throw new Error('Focus zoom amount is unsupported')
-    return { id: identifier(input.id, 'Focus zoom ID'), start, duration: effectDuration, zoom: input.zoom as FocusZoomEffect['zoom'], focusX: number(input.focusX, 'Focus x', 0, 1), focusY: number(input.focusY, 'Focus y', 0, 1) }
+    return { id: identifier(input.id, 'Focus zoom ID'), start, duration: effectDuration,
+      ...(transitionDuration === undefined ? {} : { transitionDuration }),
+      zoom: input.zoom as FocusZoomEffect['zoom'], focusX: number(input.focusX, 'Focus x', 0, 1), focusY: number(input.focusY, 'Focus y', 0, 1) }
   })
   validateUniqueIds(output, 'Focus zoom')
   const sorted = [...output].sort((left, right) => left.start - right.start)

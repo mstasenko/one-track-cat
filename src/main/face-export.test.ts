@@ -24,7 +24,7 @@ vi.mock('./export-encoder', async (importOriginal) => {
 })
 vi.mock('./face-detection-cache', () => ({ prepareFaceDetectionCache: detectionCacheMock.prepare }))
 import { requireFacePack } from './face-pack'
-import { encodeWithFaces, faceEffectRows } from './face-export'
+import { decoderCommand, encodeWithFaces, faceEffectRows } from './face-export'
 import { softwareEncoder } from './export-encoder'
 import { jobs } from './jobs'
 import { nativeFaceWorkerCommand } from './face-worker'
@@ -69,6 +69,16 @@ describe('face export composition pipeline', () => {
       commit: vi.fn(),
       cleanup: vi.fn()
     })
+  })
+
+  it('can limit AI video by exact frames while retaining the audio duration limit', () => {
+    const filter = { graph: 'graph', videoLabel: 'video', audioLabel: 'audio' }
+    const args = decoderCommand([], filter, 17.30412, '/output/audio.m4a', 520).args
+    const videoEnd = args.indexOf('pipe:1')
+    expect(args.slice(0, videoEnd)).toEqual(expect.arrayContaining(['-frames:v', '520']))
+    expect(args.slice(0, videoEnd)).not.toContain('-t')
+    expect(args.slice(videoEnd)).toEqual(expect.arrayContaining(['-t', '17.30412']))
+    expect(decoderCommand([], filter, 17.30412, '/output/audio.m4a').args).not.toContain('-frames:v')
   })
 
   it('serializes only validated numeric settings for the native worker', () => {

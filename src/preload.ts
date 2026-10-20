@@ -8,7 +8,9 @@ import type {
   GpuDiagnostics,
   JobProgress,
   MediaMetadata,
-  SavedSession
+  SavedSession,
+  AiModelDownloadProgress,
+  AiEnhancementMode
 } from './types'
 import type { VideoDirectory } from './video-picker'
 import type { OnlineTemplate, TemplateCategory, TemplateSource } from './online-templates'
@@ -33,6 +35,18 @@ const api: otcApi = {
   waveform: (path: string) => ipcRenderer.invoke('media:waveform', path) as Promise<number[]>,
   scanAssets: () => ipcRenderer.invoke('assets:scan') as Promise<AssetItem[]>,
   facePackStatus: () => ipcRenderer.invoke('faces:pack-status') as Promise<{ available: boolean; message: string }>,
+  aiPackStatus: (spatial?: boolean, mode?: AiEnhancementMode) =>
+    (mode === undefined ? ipcRenderer.invoke('ai:pack-status', spatial)
+      : ipcRenderer.invoke('ai:pack-status', spatial, mode)) as ReturnType<otcApi['aiPackStatus']>,
+  startModelDownload: (mode?: AiEnhancementMode) =>
+    (mode === undefined ? ipcRenderer.invoke('ai:model-download:start')
+      : ipcRenderer.invoke('ai:model-download:start', mode)) as Promise<void>,
+  cancelModelDownload: () => ipcRenderer.invoke('ai:model-download:cancel') as Promise<boolean>,
+  subscribeModelDownload: (callback: (progress: AiModelDownloadProgress) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, progress: AiModelDownloadProgress): void => callback(progress)
+    ipcRenderer.on('ai:model-download:progress', listener)
+    return () => ipcRenderer.removeListener('ai:model-download:progress', listener)
+  },
   previewFaces: (request: ExportRequest) => ipcRenderer.invoke('faces:preview', request) as Promise<string>,
   restoreFacePreview: (request: ExportRequest) =>
     ipcRenderer.invoke('faces:restore', request) as Promise<FacePreviewResult[]>,

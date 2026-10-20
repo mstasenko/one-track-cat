@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import type { JobProgress } from '@shared/types'
 
 function activeExportJob(job: JobProgress | null): JobProgress | null {
@@ -22,6 +23,7 @@ function progressPhase(job: JobProgress | null): string {
     case 'starting': return 'Starting'
     case 'preparing': return 'Preparing'
     case 'masking': return 'Masking faces'
+    case 'enhancing': return 'AI enhancing video'
     case 'encoding': return 'Encoding video'
     case 'finalizing': return 'Finalizing export'
     case 'complete': return 'Complete'
@@ -51,8 +53,10 @@ export function ExportProgress({ exporting, job, title, onCancel }: {
   title?: string
   onCancel?: () => void
 }): React.JSX.Element | null {
+  const [cancellingId, setCancellingId] = useState<string | null>(null)
   if (!exporting) return null
   const activeJob = activeExportJob(job)
+  const cancelling = activeJob !== null && cancellingId === activeJob.id
   return (
     <div className="modal-backdrop export-backdrop">
       <div className="export-dialog" role="dialog" aria-modal="true" aria-labelledby="export-progress-title">
@@ -65,15 +69,19 @@ export function ExportProgress({ exporting, job, title, onCancel }: {
             <span className="export-scanner-sweep" />
           </span>
         </div>
-        <p>{progressMessage(activeJob)}</p>
+        <p>{cancelling ? 'Cancelling… waiting for processing to stop safely.' : progressMessage(activeJob)}</p>
         <div className="export-status" aria-live="polite">
-          <span data-testid="export-phase">Phase: {progressPhase(activeJob)}</span>
-          <span data-testid="export-eta">Stage ETA: {formatEta(activeJob)}</span>
+          <span data-testid="export-phase">Phase: {cancelling ? 'Stopping' : progressPhase(activeJob)}</span>
+          <span data-testid="export-eta">{cancelling ? 'Waiting for the current batch to finish…' : `Stage ETA: ${formatEta(activeJob)}`}</span>
         </div>
-        <button autoFocus disabled={!activeJob} onClick={() => {
+        <button autoFocus disabled={!activeJob || cancelling} onClick={() => {
+          if (!activeJob) return
+          setCancellingId(activeJob.id)
           if (onCancel) onCancel()
-          else if (activeJob) void window.otc.cancelJob(activeJob.id).catch(() => undefined)
-        }}>Cancel</button>
+          else void window.otc.cancelJob(activeJob.id).catch(() => {
+            setCancellingId((id) => id === activeJob.id ? null : id)
+          })
+        }}>{cancelling ? 'Cancelling…' : 'Cancel'}</button>
       </div>
     </div>
   )

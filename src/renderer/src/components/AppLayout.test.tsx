@@ -111,7 +111,7 @@ afterEach(() => {
 describe('export progress scanner', () => {
   it.each([
     ['queued', 'Queued'], ['starting', 'Starting'], ['preparing', 'Preparing'],
-    ['masking', 'Masking faces'], ['encoding', 'Encoding video'],
+    ['masking', 'Masking faces'], ['enhancing', 'AI enhancing video'], ['encoding', 'Encoding video'],
     ['finalizing', 'Finalizing export'], ['complete', 'Complete']
   ] as const)('describes the %s stage', (phase, expected) => {
     const app = renderProgress({ job: { ...runningJob, phase, message: '' } })
@@ -183,6 +183,21 @@ describe('export progress scanner', () => {
     expect(app.querySelector('[data-testid="export-eta"]')?.textContent).toBe('Stage ETA: 12s remaining')
   })
 
+  it('shows the AI enhancement device and stage ETA in the shared progress dialog', () => {
+    const app = renderProgress({ job: {
+      ...runningJob,
+      phase: 'enhancing',
+      progress: 0.5,
+      message: 'AI enhancing video using dGPU: 50%',
+      hardwareLabel: 'dGPU',
+      etaSeconds: 12
+    } })
+
+    expect(app.querySelector('p')?.textContent).toBe('AI enhancing video using dGPU: 50%')
+    expect(app.querySelector('[data-testid="export-phase"]')?.textContent).toBe('Phase: AI enhancing video')
+    expect(app.querySelector('[data-testid="export-eta"]')?.textContent).toBe('Stage ETA: 12s remaining')
+  })
+
   it('keeps preparing progress indeterminate for the face-preview title', () => {
     const app = renderProgress({ title: 'Applying face blur' })
     const progress = app.querySelector('progress')
@@ -204,7 +219,7 @@ describe('export progress scanner', () => {
 
     const onCancel = vi.fn()
     act(() => {
-      root?.render(<ExportProgress exporting job={runningJob} title="Applying face blur" onCancel={onCancel} />)
+      root?.render(<ExportProgress exporting job={{ ...runningJob, id: 'face-preview-1' }} title="Applying face blur" onCancel={onCancel} />)
     })
     const faceCancel = container?.querySelector('button')
     if (!(faceCancel instanceof HTMLButtonElement)) throw new Error('face-preview cancel button missing')

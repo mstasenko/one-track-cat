@@ -1,164 +1,7 @@
-import { act, type DragEvent } from 'react'
-import { createRoot, type Root } from 'react-dom/client'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-
-const { mockStore, mockStoreHook, workspaceProps, saveCurrentSessionMock, autosaveCallback, startAutosaveMock } = vi.hoisted(() => {
-  const store = {
-    initialized: true,
-    session: null,
-    history: [],
-    future: [],
-    gesture: null,
-    assets: [],
-    gpu: null,
-    job: null,
-    busy: null,
-    error: null,
-    initialize: vi.fn().mockResolvedValue(undefined),
-    loadVideo: vi.fn().mockResolvedValue(undefined),
-    openShort: vi.fn().mockResolvedValue(undefined),
-    resetProject: vi.fn().mockResolvedValue(undefined),
-    setJob: vi.fn(),
-    showError: vi.fn(),
-    setPlayhead: vi.fn(),
-    selectOverlay: vi.fn(),
-    undo: vi.fn(),
-    redo: vi.fn(),
-    removeSelectedOverlay: vi.fn(),
-    addMark: vi.fn(),
-    clearMarks: vi.fn(),
-    removeMarked: vi.fn(),
-    applyFaceBlur: vi.fn(),
-    updateFaceBlurSettings: vi.fn(),
-    removeFaceBlur: vi.fn()
-  }
-  const hook = Object.assign(vi.fn(() => store), { getState: vi.fn(() => store) })
-  const saveCurrentSession = vi.fn().mockResolvedValue(null)
-  const autosave = { current: undefined as (() => void) | undefined }
-  const startAutosave = vi.fn((callback: () => void) => {
-    autosave.current = callback
-    return () => undefined
-  })
-  return {
-    mockStore: store,
-    mockStoreHook: hook,
-    workspaceProps: { current: undefined as Record<string, unknown> | undefined },
-    saveCurrentSessionMock: saveCurrentSession,
-    autosaveCallback: autosave,
-    startAutosaveMock: startAutosave
-  }
-})
-
-vi.mock('./model/store', () => ({ useEditorStore: mockStoreHook }))
-vi.mock('./session-persistence', () => ({
-  saveCurrentSession: saveCurrentSessionMock,
-  startAutosave: startAutosaveMock
-}))
-vi.mock('./components/AppLayout', () => ({
-  EditorWorkspace: (props: Record<string, unknown>) => {
-    workspaceProps.current = props
-    return null
-  },
-  ExportProgress: () => null,
-  GpuWarning: () => null,
-  StatusBanners: () => null,
-  Welcome: ({ onOpen, onOpenShort, onDrop }: {
-    onOpen: () => void
-    onOpenShort: () => void
-    onDrop: (event: DragEvent<HTMLElement>, short: boolean) => void
-  }) => <>
-    <button type="button" onClick={onOpen}>Open</button>
-    <button type="button" onClick={onOpenShort}>Open Short</button>
-    <div data-testid="short-drop" onDrop={(event) => { event.stopPropagation(); onDrop(event, true) }} />
-  </>
-}))
-vi.mock('./components/VideoPicker', () => ({ VideoPicker: () => null }))
-
+import { act } from 'react'
+import { describe, expect, it, vi } from 'vitest'
+import { root, container, mockStore, mockStoreHook, workspaceProps, saveCurrentSessionMock, autosaveCallback, mount, dispatch, createSession } from './app-test-support'
 import App from './App'
-import { useVideoPickerStore } from './model/video-picker'
-
-let root: Root | undefined
-let container: HTMLDivElement | undefined
-let originalShowModal: PropertyDescriptor | undefined
-let originalClose: PropertyDescriptor | undefined
-
-function bridge(): void {
-  Object.defineProperty(window, 'otc', {
-    configurable: true,
-    value: {
-      onJobProgress: vi.fn(() => () => undefined),
-      onOpenPath: vi.fn(() => () => undefined),
-      onResetProject: vi.fn(() => () => undefined),
-      onSaveRequest: vi.fn(() => () => undefined),
-      previewFaces: vi.fn().mockResolvedValue('preview-url'),
-      restoreFacePreview: vi.fn().mockResolvedValue([]),
-      getDroppedPath: vi.fn().mockResolvedValue('/dropped.mp4'),
-      chooseExportPath: vi.fn().mockResolvedValue('/exported.mp4'),
-      exportVideo: vi.fn().mockResolvedValue(undefined),
-      getSvgDataUrl: vi.fn().mockResolvedValue('svg')
-    }
-  })
-}
-
-function mount(): HTMLDivElement {
-  container = document.createElement('div')
-  document.body.append(container)
-  root = createRoot(container)
-  act(() => { root?.render(<App />) })
-  return container
-}
-
-beforeEach(() => {
-  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
-  vi.clearAllMocks()
-  saveCurrentSessionMock.mockReset().mockResolvedValue(null)
-  autosaveCallback.current = undefined
-  bridge()
-  originalShowModal = Object.getOwnPropertyDescriptor(HTMLDialogElement.prototype, 'showModal')
-  originalClose = Object.getOwnPropertyDescriptor(HTMLDialogElement.prototype, 'close')
-  Object.defineProperty(HTMLDialogElement.prototype, 'showModal', {
-    configurable: true,
-    value: vi.fn(function showModal(this: HTMLDialogElement) { this.open = true })
-  })
-  Object.defineProperty(HTMLDialogElement.prototype, 'close', {
-    configurable: true,
-    value: vi.fn(function close(this: HTMLDialogElement) {
-      this.open = false
-      this.dispatchEvent(new Event('close'))
-    })
-  })
-  mockStore.session = null
-  mockStoreHook.mockReturnValue(mockStore)
-  mockStoreHook.getState.mockReturnValue(mockStore)
-  useVideoPickerStore.setState({ open: false })
-})
-
-afterEach(() => {
-  if (root) act(() => { root?.unmount() })
-  container?.remove()
-  root = undefined
-  container = undefined
-  if (originalShowModal) Object.defineProperty(HTMLDialogElement.prototype, 'showModal', originalShowModal)
-  else delete (HTMLDialogElement.prototype as Partial<HTMLDialogElement>).showModal
-  if (originalClose) Object.defineProperty(HTMLDialogElement.prototype, 'close', originalClose)
-  else delete (HTMLDialogElement.prototype as Partial<HTMLDialogElement>).close
-  vi.restoreAllMocks()
-})
-
-function dispatch(target: EventTarget, code = 'Space', modifiers: KeyboardEventInit = {}): KeyboardEvent {
-  const event = new KeyboardEvent('keydown', { bubbles: true, cancelable: true, code, ...modifiers })
-  act(() => { target.dispatchEvent(event) })
-  return event
-}
-
-function createSession(name = 'source.mp4') {
-  return {
-    canvas: { width: 320, height: 180, fps: 30, fit: 'contain' as const },
-    sources: [{ id: 'source', metadata: { path: `/media/${name}`, name, size: 1, modifiedAt: 1, duration: 10, width: 320, height: 180, fps: 30, videoCodec: 'h264', hasAudio: true }, playbackPath: `/media/${name}`, waveform: [] }],
-    segments: [{ id: 'segment', sourceId: 'source', sourceStart: 0, sourceEnd: 10 }],
-    overlays: [], selectedOverlayId: null, playhead: 1, marks: [], focusZooms: [], faceBlurs: []
-  }
-}
 
 describe('editor keyboard shortcuts', () => {
   it('leaves Space activation to focused buttons', () => {
@@ -347,124 +190,84 @@ describe('bridge actions and media drops', () => {
 })
 
 describe('export actions', () => {
+  it('exports to a directly entered destination', async () => {
+    const session = createSession()
+    const currentStore = { ...mockStore, session } as unknown as typeof mockStore
+    mockStoreHook.mockReturnValue(currentStore)
+    mockStoreHook.getState.mockReturnValue(currentStore)
+    saveCurrentSessionMock.mockResolvedValueOnce(session)
+    mount()
+    const action = workspaceProps.current?.onExport
+    if (typeof action !== 'function') throw new Error('export action missing')
+    act(() => { (action as () => void)() })
+
+    const path = container?.querySelector('[data-ai-export-path]')
+    const start = container?.querySelector('[data-ai-export-start]')
+    if (!(path instanceof HTMLInputElement) || !(start instanceof HTMLButtonElement)) {
+      throw new Error('AI export destination controls missing')
+    }
+    act(() => {
+      // React tracks the instance setter, so tests must call the native setter.
+      // eslint-disable-next-line @typescript-eslint/unbound-method
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+      if (!setter) throw new Error('Input value setter missing')
+      setter.call(path, '/exports/direct.mp4')
+      path.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => {
+      start.click()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(window.otc.chooseExportPath).toHaveBeenCalledWith('source-edited.mp4', '/exports/direct.mp4')
+    expect(window.otc.exportVideo).toHaveBeenCalledWith(expect.objectContaining({ outputPath: '/exported.mp4' }))
+  })
+
   it('exports the saved session and handles cancellation and failures', async () => {
     const session = createSession()
     const currentStore = { ...mockStore, session } as unknown as typeof mockStore
     mockStoreHook.mockReturnValue(currentStore)
     mockStoreHook.getState.mockReturnValue(currentStore)
     mount()
-    const onExport = workspaceProps.current?.onExport
-    if (typeof onExport !== 'function') throw new Error('export action missing')
+    const onExport = (): void => {
+      const action = workspaceProps.current?.onExport
+      if (typeof action !== 'function') throw new Error('export action missing')
+      ;(action as () => void)()
+    }
 
     saveCurrentSessionMock.mockResolvedValueOnce(session)
+    act(() => { onExport() })
+    const start = container?.querySelector('[data-ai-export-start]')
+    if (!(start instanceof HTMLButtonElement)) throw new Error('AI export start button missing')
     await act(async () => {
-      ;(onExport as () => void)()
+      start.click()
       await Promise.resolve()
       await Promise.resolve()
     })
     expect(window.otc.chooseExportPath).toHaveBeenCalledWith('source-edited.mp4')
     expect(window.otc.exportVideo).toHaveBeenCalledWith(expect.objectContaining({ outputPath: '/exported.mp4' }))
+    expect(vi.mocked(window.otc.exportVideo).mock.calls[0]?.[0]).not.toHaveProperty('aiEnhance')
 
     vi.mocked(window.otc.chooseExportPath).mockRejectedValueOnce(new Error('cancelled by user'))
     await act(async () => {
-      ;(onExport as () => void)()
+      onExport()
+      const dialogStart = container?.querySelector('[data-ai-export-start]')
+      if (!(dialogStart instanceof HTMLButtonElement)) throw new Error('AI export start button missing')
+      dialogStart.click()
       await Promise.resolve()
     })
     expect(currentStore.showError).not.toHaveBeenCalled()
 
     vi.mocked(window.otc.chooseExportPath).mockRejectedValueOnce(new Error('disk unavailable'))
     await act(async () => {
-      ;(onExport as () => void)()
+      onExport()
+      const dialogStart = container?.querySelector('[data-ai-export-start]')
+      if (!(dialogStart instanceof HTMLButtonElement)) throw new Error('AI export start button missing')
+      dialogStart.click()
       await Promise.resolve()
     })
     expect(currentStore.showError).toHaveBeenCalledWith(expect.stringContaining('disk unavailable'))
   })
-})
 
-describe('reset project dialog', () => {
-  it('opens for a reset request and blocks shortcuts and drops until cancelled', async () => {
-    const session = {
-      canvas: { width: 320, height: 180, fps: 30, fit: 'contain' as const },
-      sources: [{ id: 'source', metadata: { path: '/source.mp4', name: 'source.mp4', size: 1, modifiedAt: 1, duration: 10, width: 320, height: 180, fps: 30, videoCodec: 'h264', hasAudio: true }, playbackPath: '/source.mp4', waveform: [] }],
-      segments: [{ id: 'segment', sourceId: 'source', sourceStart: 0, sourceEnd: 10 }],
-      overlays: [], selectedOverlayId: null, playhead: 0, marks: [], focusZooms: [], faceBlurs: []
-    }
-    const currentStore = { ...mockStore, session } as unknown as typeof mockStore
-    mockStoreHook.mockReturnValue(currentStore)
-    mockStoreHook.getState.mockReturnValue(currentStore)
-    const app = mount()
-    const resetListener = vi.mocked(window.otc.onResetProject).mock.calls[0]?.[0]
-    if (typeof resetListener !== 'function') throw new Error('reset listener missing')
-
-    act(() => { resetListener() })
-    expect(container?.querySelector('[data-confirm-dialog]')).not.toBeNull()
-
-    const shortcut = dispatch(app, 'ArrowRight')
-    expect(shortcut.defaultPrevented).toBe(false)
-    expect(currentStore.setPlayhead).not.toHaveBeenCalled()
-
-    const drop = new Event('drop', { bubbles: true, cancelable: true })
-    Object.defineProperty(drop, 'dataTransfer', { value: { files: [{}] } })
-    const surface = container?.querySelector('.app')
-    if (!(surface instanceof HTMLElement)) throw new Error('app surface missing')
-    act(() => { surface.dispatchEvent(drop) })
-    await act(async () => { await Promise.resolve() })
-    expect(drop.defaultPrevented).toBe(true)
-    expect(window.otc.getDroppedPath).not.toHaveBeenCalled()
-    expect(currentStore.loadVideo).not.toHaveBeenCalled()
-
-    const cancel = container?.querySelector('[data-confirm-cancel]')
-    if (!(cancel instanceof HTMLButtonElement)) throw new Error('cancel button missing')
-    act(() => { cancel.click() })
-    const dialog = container?.querySelector('[data-confirm-dialog]')
-    expect(dialog instanceof HTMLDialogElement && dialog.open).toBe(false)
-  })
-
-  it('confirms only after the explicit Reset action', () => {
-    const app = mount()
-    const resetListener = vi.mocked(window.otc.onResetProject).mock.calls[0]?.[0]
-    if (typeof resetListener !== 'function') throw new Error('reset listener missing')
-    act(() => { resetListener() })
-
-    const reset = app.querySelector('[data-confirm-submit]')
-    if (!(reset instanceof HTMLButtonElement)) throw new Error('reset button missing')
-    act(() => { reset.click() })
-
-    expect(mockStore.resetProject).toHaveBeenCalledOnce()
-  })
-
-  it('blocks delete, reset, and drops while the video picker is open', async () => {
-    const session = createSession()
-    const currentStore = { ...mockStore, session } as unknown as typeof mockStore
-    mockStoreHook.mockReturnValue(currentStore)
-    mockStoreHook.getState.mockReturnValue(currentStore)
-    useVideoPickerStore.setState({ open: true })
-    const app = mount()
-
-    const resetListener = vi.mocked(window.otc.onResetProject).mock.calls[0]?.[0]
-    if (typeof resetListener !== 'function') throw new Error('reset listener missing')
-    act(() => { resetListener() })
-    const resetDialog = container?.querySelector('[data-confirm-dialog]')
-    expect(resetDialog instanceof HTMLDialogElement && resetDialog.open).toBe(false)
-
-    const shortcut = dispatch(app, 'Delete')
-    expect(shortcut.defaultPrevented).toBe(false)
-    expect(currentStore.removeMarked).not.toHaveBeenCalled()
-    expect(currentStore.removeSelectedOverlay).not.toHaveBeenCalled()
-
-    const drop = new Event('drop', { bubbles: true, cancelable: true })
-    Object.defineProperty(drop, 'dataTransfer', { value: { files: [{}] } })
-    const surface = container?.querySelector('.app')
-    if (!(surface instanceof HTMLElement)) throw new Error('app surface missing')
-    await act(async () => {
-      surface.dispatchEvent(drop)
-      await Promise.resolve()
-    })
-    expect(drop.defaultPrevented).toBe(true)
-    expect(window.otc.getDroppedPath).not.toHaveBeenCalled()
-    expect(currentStore.loadVideo).not.toHaveBeenCalled()
-    expect(currentStore.resetProject).not.toHaveBeenCalled()
-    expect(saveCurrentSessionMock).not.toHaveBeenCalled()
-    expect(currentStore.session).toBe(session)
-  })
 })

@@ -17,7 +17,9 @@ video without an account or an upload.
   Replay repeats the footage at half speed and carries over face blur. Other effects aren't copied, but text and effects spanning the replay stay active.
 - Add text, pictures, GIFs, reaction videos, sounds, and simple transitions.
 - Make a regular landscape video or a 9:16 Short.
+- For Shorts, use the arrows above the timeline to set the frame position at the playhead. The frame moves smoothly between these points; click a diamond to return to one.
 - Blur, pixelate, or mask faces with the optional local face pack.
+- Export an AI-enhanced 4K, 60 fps video with the optional AI pack.
 - Undo and redo your editing.
 
 ## Requirements
@@ -28,6 +30,24 @@ video without an account or an upload.
 
 OneTrackCat is currently developed and tested for this setup. Other Linux desktops, X11,
 Windows, and macOS are not supported at this time.
+
+### Hardware for optional AI features
+
+| AI feature | Required pack | GPU / fallback | Recommended system RAM |
+| --- | --- | --- | --- |
+| Face detection and blur | Face pack | Intel integrated or discrete GPU; CPU fallback. | 8 GB; 16 GB for 4K. |
+| 4K enhancement — Turbo / Base (FlashVSR+) | AI pack + first-use model download | Intel Arc discrete GPU with at least 12 GB VRAM; no CPU fallback for upscaling. | 32 GB. |
+| AI interpolation to 60 fps (input ≤50 fps) | AI pack | Intel GPU; CPU fallback. At 4K, GPU processing can need about 10 GB VRAM. | 16 GB; 32 GB for 4K. |
+
+The Arc B580 (12 GB) is the primary tested enhancement card. A770 (16 GB) also passes
+Turbo and Base tests, but is slower in current measurements. AMD and NVIDIA cards are not
+supported for AI enhancement. RIFE interpolation can use an Intel GPU or the CPU;
+CPU processing is slower. Above 50 fps, conversion to 60 fps repeats frames instead
+and needs no interpolation model or GPU inference.
+
+RAM figures are recommendations, not guaranteed minimums. Integrated GPUs share system RAM;
+discrete GPUs have separate VRAM. Other open programs also need memory. AI exports also need
+free temporary disk space; OneTrackCat checks it before starting.
 
 ## Install and open OneTrackCat
 
@@ -41,16 +61,18 @@ Run OneTrackCat as your normal user. You do not need `sudo` or an administrator 
 ## Optional media packs
 
 The media pack adds ready-to-use reaction images, clips, and sounds. The face pack adds the
-**Blur faces** effect. Download either archive from Releases and extract it beside the AppImage.
+**Blur faces** effect. The AI pack adds optional video enhancement. Download the packs you want
+from Releases and extract them beside the AppImage.
 
 ```text
 one-track-cat/
 ├── OneTrackCat-...AppImage
 ├── meme/
-└── face-pack/
+├── face-pack/
+└── ai-pack/
 ```
 
-You can use OneTrackCat without either pack and add your own media with **New**. The packs are
+You can use OneTrackCat without any packs and add your own media with **New**. The packs are
 optional downloads; their included files and licenses are listed in their manifests.
 
 ## A simple editing workflow
@@ -59,7 +81,7 @@ optional downloads; their included files and licenses are listed in their manife
 2. Move the playhead and add marks around a moment.
 3. Click inside a section, then choose **Remove Marked**, **Speed**, **Zoom**, **Freeze**, or **Replay**.
 4. Add text, a picture, a reaction clip, or a sound from the side panel.
-5. Choose **Export**, select a destination, and wait for the finished video.
+5. Choose **Export**, click **Start**, and select where to save the finished video.
 
 In the video chooser, hover over a clip for a short, silent preview. **Browse…** opens
 the usual file dialog. **Clear Marks** removes only the highlighted section's boundary
@@ -100,9 +122,11 @@ Face-blur ranges appear on the timeline. Export reuses the preview's face analys
 footage and detection settings have not changed during the same app session. Export still
 needs to apply the effect and encode the finished video.
 
-- **Sensitivity** balances missed faces against extra detections.
+- **Sensitivity** balances missed faces against extra detections. The default 1% is strict;
+  increase it if real faces are missed.
 - **Small faces** looks for smaller faces and may take longer.
-- **Hold missed faces** keeps a face covered briefly if detection misses a frame.
+- **Hold missed faces** extends an existing mask through short detection gaps (0.3 seconds
+  by default, up to 2 seconds). It cannot cover a face before its first detection or a longer gap.
 - **Strength** and **Style** control how strongly the face is hidden.
 
 Automatic detection can miss faces; check the preview before sharing.
@@ -110,11 +134,38 @@ Automatic detection can miss faces; check the preview before sharing.
 If hardware processing is unavailable or a permission prompt is declined, OneTrackCat falls back
 to CPU processing. Your project and media stay on your computer.
 
+### AI-enhanced export
+
+In **Export**, choose an AI enhancement mode before clicking **Start**. It is off by default
+and requires the optional AI pack. Choose **Turbo** for faster processing or **Base** for
+more detail. Enhancement applies to the finished video, including its text and effects.
+Spatial enhancement supports landscape 3840×2160 videos and vertical 2160×3840 Shorts, and
+requires a supported Intel discrete GPU. Extra frames can be added separately to reach 60 fps;
+sources at 50 fps or below use AI frame interpolation. Sources above 50 fps use occasional
+repeated frames instead, keeping conversion to 60 fps much faster.
+A video already at 4K and 60 fps needs neither unless it has close-ups. For a 4K video
+with **Zoom** effects, 4K enhancement processes only those close-ups, not the unchanged sections.
+This also applies to Shorts made from 4K footage: only the visible Short area is processed,
+and AI enhancement runs only during close-ups. Lower-resolution footage is enhanced throughout.
+In **Zoom**, use **Transition (seconds)** to set how long zoom-in and zoom-out take;
+short close-ups automatically use shorter transitions.
+
+On first use, OneTrackCat offers to download the enhancement model and shows its progress.
+Allow about 12 GB of free space to set up a mode. Exports also need temporary disk space;
+OneTrackCat checks this before starting. After setup, enhancement works offline; your videos
+are never uploaded.
+
+AI enhancement takes extra time. It can improve
+detail and motion, but cannot recover every detail missing from the original. Your video stays
+on your computer, and no enhanced preview files are kept in your project.
+
 ## Saving your project
 
 OneTrackCat autosaves the open project while you work, before export, and when it closes normally.
 Use **Project → Reset project** to forget the saved project and start over. Exported videos are
 ordinary files in the folder you choose.
+Opening a new video or resetting the project clears the previous project's face-blur previews
+and analysis. Reopening the saved project keeps them so you can continue where you left off.
 
 ## Keyboard shortcuts
 

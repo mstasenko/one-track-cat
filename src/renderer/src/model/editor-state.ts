@@ -45,7 +45,7 @@ export interface EditorState {
   cancelOverlayGesture: () => void
   removeSelectedOverlay: () => void
   setSpeed: (rate: VideoSpeed) => void
-  addFocusZoom: (zoom: FocusZoomAmount, focusX: number, focusY: number) => void
+  addFocusZoom: (zoom: FocusZoomAmount, focusX: number, focusY: number, transitionDuration?: number) => void
   nudgeShortFrame: (direction: ShortFrameDirection) => void
   removeFocusZoom: () => void
   applyVideoTransition: (into?: VideoTransition, out?: VideoTransition) => void

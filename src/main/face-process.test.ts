@@ -29,6 +29,100 @@ describe('bounded face process pipeline', () => {
     expect(send).toHaveBeenCalledWith('job:progress', expect.objectContaining({ id: 'report', state: 'running' }))
   })
 
+  it.each(['device', 'flash-device', 'rife-device'])('reports the AI worker %s hardware', async (marker) => {
+    const send = vi.fn()
+    electronMock.windows = [{ webContents: { send } }]
+    await runFacePipeline([
+      node("process.stdout.write('frame')"),
+      node(`process.stderr.write('otc-ai-enhance: ${marker}=GPU.1 hardware=dGPU\\notc-ai-enhance: progress=0.25\\n'); process.stdin.pipe(process.stdout)`),
+      consume
+    ], `ai-hardware-${marker}`, 1, { phase: 'enhancing' })
+    expect(send).toHaveBeenCalledWith('job:progress', expect.objectContaining({
+      hardwareLabel: 'dGPU', message: 'AI enhancing video using dGPU: 25%'
+    }))
+  })
+
+  it.each(['device', 'flash-device', 'rife-device'])('keeps the percentage visible across %s updates', async (marker) => {
+    const send = vi.fn()
+    electronMock.windows = [{ webContents: { send } }]
+    const statuses = [
+      'otc-ai-enhance: progress=0.70',
+      `otc-ai-enhance: ${marker}=GPU.1 hardware=dGPU`,
+      `otc-ai-enhance: ${marker}=GPU.1 hardware=dGPU`,
+      `otc-ai-enhance: ${marker}=CPU hardware=CPU`
+    ].join('\n') + '\n'
+    await runFacePipeline([
+      node("process.stdout.write('frame')"),
+      node(`process.stderr.write(${JSON.stringify(statuses)}); process.stdin.pipe(process.stdout)`),
+      consume
+    ], `ai-steady-percentage-${marker}`, 1, { phase: 'enhancing' })
+    const updates = send.mock.calls.map(([, progress]) => progress as { phase?: string; message: string })
+      .filter((progress) => progress.phase === 'enhancing')
+    expect(updates.slice(1).map((progress) => progress.message)).toEqual([
+      'AI enhancing video: 70%', 'AI enhancing video using dGPU: 70%',
+      'AI enhancing video using dGPU: 70%', 'AI enhancing video using CPU: 70%'
+    ])
+  })
+
+  it('does not advertise a failed RIFE device and reports its actual CPU fallback', async () => {
+    const send = vi.fn()
+    electronMock.windows = [{ webContents: { send } }]
+    await runFacePipeline([
+      node("process.stdout.write('frame')"),
+      node("process.stderr.write('otc-ai-enhance: rife-device=GPU.1 failed reason=no room\\notc-ai-enhance: rife-device=CPU hardware=CPU\\notc-ai-enhance: progress=0.25\\n'); process.stdin.pipe(process.stdout)"),
+      consume
+    ], 'ai-hardware-fallback', 1, { phase: 'enhancing' })
+    expect(send).toHaveBeenCalledWith('job:progress', expect.objectContaining({
+      hardwareLabel: 'CPU', message: 'AI enhancing video using CPU: 25%'
+    }))
+    expect(send.mock.calls.map(([, progress]) => progress as { hardwareLabel?: string }))
+      .not.toContainEqual(expect.objectContaining({ hardwareLabel: 'dGPU' }))
+  })
+
+  it('keeps the real AI failure while omitting noisy device and progress status', async () => {
+    const statusLines = Array.from({ length: 120 }, (_, index) => [
+      `otc-ai-enhance: progress=${((index % 100) / 100).toFixed(2)}`,
+      'otc-ai-enhance: rife-device=GPU.1 hardware=dGPU',
+      'otc-ai-enhance: flash-device=GPU.1 hardware=dGPU'
+    ]).flat().join('\n')
+    const actualError = 'source ended before Flash window filled'
+    const error = await runFacePipeline([
+      node("process.stdout.write('frame')"),
+      node(`process.stderr.write(${JSON.stringify(`${statusLines}\n${actualError}\n`)}); process.exit(1)`),
+      consume
+    ], 'ai-flash-window-error', 1, { phase: 'enhancing' }).catch((failure: unknown) => failure)
+    expect(error).toBeInstanceOf(Error)
+    const message = error instanceof Error ? error.message : String(error)
+    expect(message).toContain(actualError)
+    expect(message).not.toContain('otc-ai-enhance: progress=')
+    expect(message).not.toContain('otc-ai-enhance: rife-device=')
+    expect(message).not.toContain('otc-ai-enhance: flash-device=')
+  })
+
+  it('filters an AI status line split across stderr chunks without losing its error', async () => {
+    const actualError = 'source ended before Flash window filled'
+    const chunks = [
+      'otc-ai-enhance: prog',
+      'ress=0.25\notc-ai-enhance: flash-de',
+      `vice=GPU.1 hardware=dGPU\n${actualError}\n`
+    ]
+    const error = await runFacePipeline([
+      node("process.stdout.write('frame')"),
+      node([
+        `process.stderr.write(${JSON.stringify(chunks[0])})`,
+        `setTimeout(() => process.stderr.write(${JSON.stringify(chunks[1])}), 15)`,
+        `setTimeout(() => process.stderr.write(${JSON.stringify(chunks[2])}), 30)`,
+        'setTimeout(() => process.exit(1), 45)'
+      ].join(';')),
+      consume
+    ], 'ai-fragmented-status-error', 1, { phase: 'enhancing' }).catch((failure: unknown) => failure)
+    expect(error).toBeInstanceOf(Error)
+    const message = error instanceof Error ? error.message : String(error)
+    expect(message).toContain(actualError)
+    expect(message).not.toContain('otc-ai-enhance: progress=')
+    expect(message).not.toContain('otc-ai-enhance: flash-device=')
+  })
+
   it('streams complete frames through the worker and waits for all children', async () => {
     directory = await mkdtemp(join(tmpdir(), 'otc-face-pipe-'))
     const path = join(directory, 'frames.rgb')
@@ -118,6 +212,18 @@ describe('bounded face process pipeline', () => {
     ], 'worker-failure', 1).catch((failure: unknown) => failure)
     expect(error).not.toBeInstanceOf(FaceAuthorizationError)
     expect(error).toMatchObject({ message: 'worker failed' })
+  })
+
+  it('retains a worker SIGTERM when stderr contains only AI status', async () => {
+    const error = await runFacePipeline([
+      node("process.stdout.write('frame')"),
+      node("process.stderr.write('otc-ai-enhance: progress=0.25\\n'); setImmediate(() => process.kill(process.pid, 'SIGTERM'))"),
+      consume
+    ], 'ai-status-sigterm', 1, { phase: 'enhancing' }).catch((failure: unknown) => failure)
+    expect(error).toBeInstanceOf(Error)
+    const message = error instanceof Error ? error.message : String(error)
+    expect(message).toContain('SIGTERM')
+    expect(message).not.toContain('otc-ai-enhance: progress=')
   })
 
   it('reports the authorization prompt before starting an elevated worker', async () => {

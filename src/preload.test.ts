@@ -73,6 +73,28 @@ describe('face cache bridge', () => {
   })
 })
 
+describe('AI model download bridge', () => {
+  it.each([false, true])('forwards actual spatial readiness=%s to the existing IPC channel', async (spatial) => {
+    invoke.mockResolvedValueOnce({ available: true, message: '' })
+    await exposedApi.aiPackStatus(spatial)
+    expect(invoke).toHaveBeenCalledWith('ai:pack-status', spatial)
+  })
+  it('forwards start and cancellation to the main process', async () => {
+    invoke.mockResolvedValueOnce(undefined).mockResolvedValueOnce(true)
+    await exposedApi.startModelDownload?.()
+    await expect(exposedApi.cancelModelDownload?.()).resolves.toBe(true)
+    expect(invoke).toHaveBeenNthCalledWith(1, 'ai:model-download:start')
+    expect(invoke).toHaveBeenNthCalledWith(2, 'ai:model-download:cancel')
+  })
+
+  it('forwards the selected Flash mode to status and first-use download', async () => {
+    await exposedApi.aiPackStatus(true, 'base')
+    await exposedApi.startModelDownload?.('base')
+    expect(invoke).toHaveBeenNthCalledWith(1, 'ai:pack-status', true, 'base')
+    expect(invoke).toHaveBeenNthCalledWith(2, 'ai:model-download:start', 'base')
+  })
+})
+
 describe('video picker bridge', () => {
   it('forwards typed paths to the file-or-folder channel', async () => {
     invoke.mockResolvedValueOnce('/videos/clip.mp4')

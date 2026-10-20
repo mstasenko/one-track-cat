@@ -106,7 +106,7 @@ describe('privileged ordinary-video export', () => {
       executable: '/bundled/ffmpeg',
       args: [
         '-hide_banner', '-n', '-i', '/home/user/input.mp4', '-y', '-filter_complex_threads', '4', '-filter_complex', 'graph',
-        '-map', '[video]', '-t', '3.25', '-an', '-pix_fmt', 'rgb24', '-threads', '2', '-f', 'rawvideo', 'pipe:1',
+        '-map', '[video]', '-t', '3.25', '-an', '-pix_fmt', 'nv12', '-threads', '2', '-f', 'rawvideo', 'pipe:1',
         '-map', '[audio]', '-t', '3.25', '-vn', '-c:a', 'aac', '-b:a', '256k', '/home/user/otc-export-123/gpu-audio.m4a'
       ]
     })
@@ -117,6 +117,7 @@ describe('privileged ordinary-video export', () => {
     ])
     expect(encoder.args).toEqual(expect.arrayContaining([
       '/bundled/ffmpeg', '/dev/dri/renderD128', 'av1_vaapi', 'hevc_vaapi', 'h264_vaapi',
+      '-f', 'rawvideo', '-pixel_format', 'nv12', '-video_size', '1280x720', '-framerate', '60',
       '-rc_mode', 'CQP', '-global_quality', '110', '-qp', '18'
     ]))
     expect(encoder.args).not.toContain('/home/user/otc-export-123/gpu-video.mp4')
@@ -200,7 +201,7 @@ describe('privileged ordinary-video export', () => {
       expect.any(String), '--'
     ])
     expect(command.args).toEqual(expect.arrayContaining([
-      'av1_vaapi', 'hevc_vaapi', 'h264_vaapi', '-rc_mode', 'CQP', '-global_quality', '110'
+      'av1_vaapi', 'hevc_vaapi', 'h264_vaapi', '-pixel_format', 'rgb24', '-rc_mode', 'CQP', '-global_quality', '110'
     ]))
     expect(command.args).not.toContain('/tmp/ffmpeg with space;trusted -hide_banner')
   })

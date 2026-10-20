@@ -19,6 +19,13 @@ const request = {
 describe('face export disk-space guard', () => {
   beforeEach(() => vi.clearAllMocks())
 
+  it('reserves additional space for AI enhancement intermediates', () => {
+    const ordinary = estimatedExportBytes(request)
+    const enhanced = estimatedExportBytes({ ...request, aiEnhance: {} })
+
+    expect(enhanced).toBeGreaterThan(ordinary)
+  })
+
   it('requires one conservative estimate on each different filesystem', async () => {
     const estimated = estimatedExportBytes(request)
     fsPromiseMock.statfs

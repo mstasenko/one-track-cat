@@ -235,8 +235,18 @@ describe('asset panel', () => {
     act(() => { button(app, /Back/).click() })
 
     act(() => { button(app, 'Zoom').click() })
+    const transitionDuration = app.querySelector('input[aria-label="Transition (seconds)"]')
+    expect(transitionDuration).toBeInstanceOf(HTMLInputElement)
+    expect((transitionDuration as HTMLInputElement).value).toBe('0.5')
     act(() => { button(app, '2×').click() })
-    expect(onFocusPick).toHaveBeenCalledWith(2)
+    expect(onFocusPick).toHaveBeenCalledWith(2, 0.5)
+    const input = transitionDuration as HTMLInputElement
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(input, '1.25')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    act(() => { button(app, '3×').click() })
+    expect(onFocusPick).toHaveBeenLastCalledWith(3, 1.25)
     expect(button(app, 'Remove zoom').disabled).toBe(false)
     act(() => { button(app, 'Remove zoom').click() })
     expect(onRemoveFocusZoom).toHaveBeenCalledOnce()

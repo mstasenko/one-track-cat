@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { click, completeVideoPicker, dismissHardwareWarningIfNeeded, e2eEnvironment, ffmpeg, ffprobe, hover, main, moveMouse, seekTimeline, syntheticVideo, wheel } from './support'
+import { click, completeVideoPicker, dismissHardwareWarningIfNeeded, e2eEnvironment, ffmpeg, ffprobe, hover, main, moveMouse, seekTimeline, startExport, syntheticVideo, wheel } from './support'
 const applications: ElectronApplication[] = []
 const temporaryDirectories: string[] = []
 
@@ -207,7 +207,7 @@ test('renders added text into the exported video', async () => {
       if (document.body.innerText.includes('NaN')) root.dataset.sawNan = 'true'
     }).observe(document.body, { childList: true, characterData: true, subtree: true })
   })
-  await click(window.getByRole('button', { name: 'Export', exact: true }))
+  await startExport(window)
   const exportDialog = window.getByRole('dialog', { name: 'Exporting video' })
   await expect(exportDialog).toBeVisible()
   await expect(exportDialog.getByRole('progressbar')).toBeVisible()
@@ -231,7 +231,7 @@ test('renders SVG library images into the exported video', async () => {
   await expect(window.getByText('black.mp4', { exact: true })).toBeVisible()
   await click(window.getByRole('button', { name: 'Images', exact: true }))
   await click(window.getByRole('button', { name: 'Awesome Face', exact: true }))
-  await click(window.getByRole('button', { name: 'Export', exact: true }))
+  await startExport(window)
   await expect(window.getByRole('dialog', { name: 'Exporting video' })).toBeVisible()
   await expect(window.getByRole('button', { name: 'Export', exact: true })).toBeEnabled({ timeout: 30_000 })
   await expect.poll(() => existsSync(output), { timeout: 30_000 }).toBe(true)
@@ -257,7 +257,7 @@ test('exports WebM video audio together with an OGG effect', async () => {
   await click(window.getByRole('button', { name: '← Back' }))
   await click(window.getByRole('button', { name: 'Audio', exact: true }))
   await click(window.getByRole('button', { name: 'Wilhelm Scream', exact: true }))
-  await click(window.getByRole('button', { name: 'Export', exact: true }))
+  await startExport(window)
   await expect(window.getByRole('dialog', { name: 'Exporting video' })).toBeVisible()
   await expect(window.getByRole('button', { name: 'Export', exact: true })).toBeEnabled({ timeout: 30_000 })
   await expect.poll(() => existsSync(output), { timeout: 30_000 }).toBe(true)
@@ -297,7 +297,7 @@ test('prepares, restores, previews, and exports an external GIF', async () => {
   await expect.poll(() => restoredGifPreview.evaluate((video) => (video as HTMLVideoElement).readyState), {
     timeout: 15_000
   }).toBeGreaterThan(0)
-  await click(restoredWindow.getByRole('button', { name: 'Export', exact: true }))
+  await startExport(restoredWindow)
   await expect(restoredWindow.getByRole('dialog', { name: 'Exporting video' })).toBeVisible()
   await expect(restoredWindow.getByRole('button', { name: 'Export', exact: true })).toBeEnabled({ timeout: 30_000 })
   await expect.poll(() => existsSync(output), { timeout: 30_000 }).toBe(true)
@@ -316,7 +316,7 @@ test('blocks editing and removes partial output when export is cancelled', async
   const window = await app.firstWindow()
   await expect(window.getByText('long.mp4', { exact: true })).toBeVisible()
   await click(window.getByRole('button', { name: 'Text', exact: true }))
-  await click(window.getByRole('button', { name: 'Export', exact: true }))
+  await startExport(window)
   const dialog = window.getByRole('dialog', { name: 'Exporting video' })
   await expect(dialog).toBeVisible()
   const cancel = dialog.getByRole('button', { name: 'Cancel' })
@@ -380,7 +380,7 @@ test('ripple-inserts and exports a second main-timeline video', async () => {
     return renderedOpacities.size
   }, { intervals: [20], timeout: 5_000 }).toBeGreaterThan(3)
   await click(window.getByRole('button', { name: 'Pause', exact: true }))
-  await click(window.getByRole('button', { name: 'Export', exact: true }))
+  await startExport(window)
   await expect(window.getByRole('button', { name: 'Export', exact: true })).toBeEnabled({ timeout: 30_000 })
   await expect.poll(() => existsSync(output), { timeout: 30_000 }).toBe(true)
   const result = probe(output)
@@ -425,7 +425,7 @@ test('shows full source framing for a Short and fills its selected frame in expo
   if (!box) throw new Error('Timeline is not visible')
   await hover(timeline, { position: { x: box.width * 0.1, y: 20 } })
   await expect(window.locator('.timeline-hover-overlay video')).toHaveCSS('object-fit', 'cover')
-  await click(window.getByRole('button', { name: 'Export', exact: true }))
+  await startExport(window)
   await expect(window.getByRole('button', { name: 'Export', exact: true })).toBeEnabled({ timeout: 30_000 })
   await expect.poll(() => existsSync(output), { timeout: 30_000 }).toBe(true)
   expect(probe(output).streams.find((stream) => stream.codec_type === 'video')).toMatchObject({ width: 1080, height: 1920 })

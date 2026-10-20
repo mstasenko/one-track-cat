@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { EditSession, FaceBlurSettings } from '@shared/types'
+import { aiTargetFps, aiTargetLongEdge, type AiEnhancementOptions, type EditSession, type FaceBlurSettings } from '@shared/types'
 import './components/video-picker.css'
 import { EditorWorkspace, GpuWarning, StatusBanners, Welcome } from './components/AppLayout'
 import { ExportProgress } from './components/ExportProgress'
 import { ConfirmDialog } from './components/ConfirmDialog'
+import { AiExportDialog } from './components/AiExportDialog'
 import { VideoPicker } from './components/VideoPicker'
 import { useEditorStore } from './model/store'
 import { useVideoPickerStore } from './model/video-picker'
@@ -34,12 +35,21 @@ function exportWasCancelled(error: unknown): boolean {
   return message.toLowerCase().includes('cancelled')
 }
 
+const defaultAiCanvas = {
+  width: aiTargetLongEdge,
+  height: Math.round(aiTargetLongEdge * 9 / 16),
+  fps: aiTargetFps,
+  fit: 'contain' as const
+}
+
 export default function App(): React.JSX.Element {
   const store = useEditorStore()
   const pickerOpen = useVideoPickerStore((state) => state.open)
   const [playing, setPlaying] = useState(false)
   const [zoom, setZoom] = useState(1)
   const [exporting, setExporting] = useState(false)
+  const [exportDialogOpen, setExportDialogOpen] = useState(false)
+  const cancelModelDownload = useCallback((): void => { void window.otc.cancelModelDownload?.() }, [])
   const [gpuWarningDismissed, setGpuWarningDismissed] = useState(false)
   const [resetDialogOpen, setResetDialogOpen] = useState(false)
   const [selectedFaceBlurId, setSelectedFaceBlurId] = useState<string | null>(null)
@@ -61,7 +71,7 @@ export default function App(): React.JSX.Element {
   const previewActive = facePreview.rendering
   const resetBlockedRef = useRef(false)
   const resetDialogOpenRef = useRef(false)
-  resetBlockedRef.current = exporting || previewActive || pickerOpen
+  resetBlockedRef.current = exporting || previewActive || pickerOpen || exportDialogOpen
   resetDialogOpenRef.current = resetDialogOpen
 
   useEffect(() => {
@@ -126,7 +136,7 @@ export default function App(): React.JSX.Element {
   }, [])
 
   const onKeyDown = useCallback((event: KeyboardEvent): void => {
-    if (resetDialogOpen || pickerOpen) return
+    if (resetDialogOpen || exportDialogOpen || pickerOpen) return
     if (exporting || previewActive || ignoresShortcut(event)) return
     const currentStore = useEditorStore.getState()
     const actions: Record<string, () => void> = {
@@ -170,21 +180,32 @@ export default function App(): React.JSX.Element {
     if (!action) return
     event.preventDefault()
     action()
-  }, [exporting, pickerOpen, previewActive, resetDialogOpen, selectedFaceBlurId])
+  }, [exportDialogOpen, exporting, pickerOpen, previewActive, resetDialogOpen, selectedFaceBlurId])
 
   useEffect(() => {
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [onKeyDown])
 
-  const runExport = async (current: EditSession): Promise<void> => {
+  const runExport = async (
+    current: EditSession,
+    aiEnhance?: AiEnhancementOptions,
+    requestedOutputPath?: string
+  ): Promise<void> => {
     try {
-      const outputPath = await window.otc.chooseExportPath(exportName(primarySource(current).metadata.name))
+      const defaultName = exportName(primarySource(current).metadata.name)
+      const outputPath = requestedOutputPath
+        ? await window.otc.chooseExportPath(defaultName, requestedOutputPath)
+        : await window.otc.chooseExportPath(defaultName)
       if (!outputPath) return
       setPlaying(false)
       setExporting(true)
       const saved = await saveCurrentSession()
-      if (saved) await window.otc.exportVideo(await prepareExportRequest(saved, outputPath))
+      if (saved) {
+        const request = await prepareExportRequest(saved, outputPath)
+        const exportRequest = aiEnhance ? { ...request, aiEnhance } : request
+        await window.otc.exportVideo(exportRequest)
+      }
     } catch (error) {
       if (!exportWasCancelled(error)) {
         store.showError(`OneTrackCat could not export this video. ${String(error).slice(0, 800)}`)
@@ -196,7 +217,7 @@ export default function App(): React.JSX.Element {
 
   const dropVideo = async (event: React.DragEvent, short = false): Promise<void> => {
     event.preventDefault()
-    if (exporting || pickerOpen || previewActive || resetDialogOpen) return
+    if (exporting || exportDialogOpen || pickerOpen || previewActive || resetDialogOpen) return
     const file = event.dataTransfer.files[0]
     if (!file) return
     try {
@@ -218,6 +239,25 @@ export default function App(): React.JSX.Element {
         job={store.job}
         title={facePreview.rendering ? 'Applying face blur' : undefined}
         onCancel={facePreview.rendering ? facePreview.invalidate : undefined}
+      />
+      <AiExportDialog
+        open={exportDialogOpen}
+        canvas={session?.canvas ?? defaultAiCanvas}
+        focusZooms={session?.focusZooms}
+        timeline={session ?? undefined}
+        defaultOutputName={session ? exportName(primarySource(session).metadata.name) : undefined}
+        getAiPackStatus={window.otc.aiPackStatus}
+        onBrowse={() => session
+          ? window.otc.chooseExportPath(exportName(primarySource(session).metadata.name))
+          : Promise.resolve(null)}
+        startModelDownload={window.otc.startModelDownload}
+        cancelModelDownload={cancelModelDownload}
+        subscribeModelDownload={window.otc.subscribeModelDownload}
+        onCancel={() => setExportDialogOpen(false)}
+        onStart={(aiEnhance, outputPath) => {
+          setExportDialogOpen(false)
+          if (session) void runExport(session, aiEnhance, outputPath)
+        }}
       />
       <ConfirmDialog
         open={resetDialogOpen}
@@ -246,13 +286,16 @@ export default function App(): React.JSX.Element {
             playing={playing}
             zoom={zoom}
             exporting={exporting}
-            resetting={resetDialogOpen}
+            resetting={resetDialogOpen || exportDialogOpen}
             facePreviewing={previewActive}
             renderedPreview={facePreview.renderedPreview}
             renderedPreviews={facePreview.renderedPreviews}
             onPlayingChange={setPlaying}
             onZoom={setZoom}
-            onExport={() => void runExport(session)}
+            onExport={() => {
+              setPlaying(false)
+              setExportDialogOpen(true)
+            }}
             onApplyFaceBlur={onApplyFaceBlur}
             onSelectFaceBlur={onSelectFaceBlur}
             onStep={(direction) => { setSelectedFaceBlurId(null); setPlaying(false); store.setPlayhead(stepOutputFrame(session, direction)) }}

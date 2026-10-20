@@ -23,6 +23,28 @@ describe('rendered and Short previews', () => {
     expect(parseFloat(guide.style.left)).toBeCloseTo(51.26953125)
   })
 
+  it('previews Short zoom inside the fixed framing guide', () => {
+    const session = createSession(metadata, true)
+    session.playhead = 3
+    session.shortFramePoints = [{ id: 'right', time: 0, position: 1 }]
+    session.focusZooms = [{ id: 'zoom', start: 1, duration: 5, zoom: 3, focusX: 0.5, focusY: 0.5 }]
+    const app = mount({ session })
+    const camera = app.querySelector('.camera-layer')
+    const guide = app.querySelector('.short-frame-guide')
+    if (!(camera instanceof HTMLDivElement) || !(guide instanceof HTMLDivElement)) throw new Error('Short camera missing')
+    const guideStyle = guide.getAttribute('style')
+    expect(camera.style.transform).toBe('scale(3) translate(-56.119792%, -33.333333%)')
+    expect(camera.style.transformOrigin).toBe('top left')
+    expect(camera.contains(guide)).toBe(false)
+
+    act(() => { root?.render(<Preview {...props({ session: { ...session, playhead: 1.25 } })} />) })
+    expect(camera.style.transform).toContain('scale(2)')
+    expect(guide.getAttribute('style')).toBe(guideStyle)
+    act(() => { root?.render(<Preview {...props({ session: { ...session, playhead: 7 } })} />) })
+    expect(camera.style.transform).toBe('')
+    expect(guide.getAttribute('style')).toBe(guideStyle)
+  })
+
   it('uses the rendered range in the same stage without source overlays or audio', () => {
     const session = createSession(metadata)
     session.playhead = 3

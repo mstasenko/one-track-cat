@@ -1,5 +1,6 @@
 import { useState, type DragEvent } from 'react'
 import type { EditSession, FaceBlurEffect, FaceBlurSettings, FocusZoomAmount, GpuDiagnostics, Overlay } from '@shared/types'
+import { focusZoomDefaultTransitionDuration } from '@shared/focus-zoom'
 import brandIcon from '../../../../assets/icon.svg'
 import type { EditorState } from '../model/editor-state'
 import { primarySource } from '../model/timeline'
@@ -93,7 +94,7 @@ function SidePanel({ store, session, selected, selectedFaceBlur, duration, expor
   exporting: boolean
   onExport: () => void
   onPause: () => void
-  onFocusPick: (zoom: FocusZoomAmount) => void
+  onFocusPick: (zoom: FocusZoomAmount, transitionDuration: number) => void
   onPreviewText: (overlay: Overlay) => void
   onApplyFaceBlur: (settings: FaceBlurSettings) => void
   onSelectFaceBlur: (id: string | null) => void
@@ -131,7 +132,7 @@ function SidePanel({ store, session, selected, selectedFaceBlur, duration, expor
               onAsset={(asset) => void store.addAsset(asset)}
               onError={store.showError}
               onSpeed={(rate) => { onPause(); store.setSpeed(rate) }}
-              onFocusPick={(zoom) => { onPause(); onFocusPick(zoom) }}
+              onFocusPick={(zoom, transitionDuration) => { onPause(); onFocusPick(zoom, transitionDuration) }}
               onRemoveFocusZoom={() => { onPause(); store.removeFocusZoom() }}
               onVideoTransition={(into, out) => { onPause(); store.applyVideoTransition(into, out) }}
               onFreeze={(effectDuration) => { onPause(); store.insertFreeze(effectDuration) }}
@@ -195,6 +196,7 @@ export function EditorWorkspace({
   facePreviewing: boolean
 }): React.JSX.Element {
   const [focusPicking, setFocusPicking] = useState<FocusZoomAmount | null>(null)
+  const [focusTransitionDuration, setFocusTransitionDuration] = useState(focusZoomDefaultTransitionDuration)
   const selectOverlay = (id: string | null): void => {
     onSelectFaceBlur(null)
     store.selectOverlay(id)
@@ -206,7 +208,10 @@ export function EditorWorkspace({
   }
   return (
     <main className="workspace" inert={exporting || resetting || facePreviewing}>
-      <SidePanel store={store} session={session} selected={selected} selectedFaceBlur={selectedFaceBlur} duration={duration} exporting={exporting} onExport={onExport} onPause={() => onPlayingChange(false)} onFocusPick={setFocusPicking} onApplyFaceBlur={onApplyFaceBlur} onSelectFaceBlur={onSelectFaceBlur} onPreviewText={(overlay) => {
+      <SidePanel store={store} session={session} selected={selected} selectedFaceBlur={selectedFaceBlur} duration={duration} exporting={exporting} onExport={onExport} onPause={() => onPlayingChange(false)} onFocusPick={(zoom, transitionDuration) => {
+        setFocusTransitionDuration(transitionDuration)
+        setFocusPicking(zoom)
+      }} onApplyFaceBlur={onApplyFaceBlur} onSelectFaceBlur={onSelectFaceBlur} onPreviewText={(overlay) => {
         onPlayingChange(false)
         store.setPlayhead(overlay.start)
         setTimeout(() => onPlayingChange(true), 0)
@@ -235,7 +240,7 @@ export function EditorWorkspace({
           renderedPreview={renderedPreview}
           renderedPreviews={renderedPreviews}
           focusPicking={focusPicking}
-          onFocusZoom={(focusZoom, x, y) => { store.addFocusZoom(focusZoom, x, y); setFocusPicking(null) }}
+          onFocusZoom={(focusZoom, x, y) => { store.addFocusZoom(focusZoom, x, y, focusTransitionDuration); setFocusPicking(null) }}
           onCancelFocusPick={() => setFocusPicking(null)}
         />
         <Timeline

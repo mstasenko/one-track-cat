@@ -12,7 +12,8 @@ import {
   meanPixelDifference,
   seekTimeline,
   syntheticVideo,
-  videoFrame
+  videoFrame,
+  startExport
 } from './support'
 
 test('freezing at source EOF exports the final source frame', async () => {
@@ -38,7 +39,7 @@ test('freezing at source EOF exports the final source frame', async () => {
     await click(page.getByRole('button', { name: '1s', exact: true }))
     await expect(page.locator('.timeline-time')).toContainText('/ 00:07.00')
 
-    await click(page.getByRole('button', { name: 'Export', exact: true }))
+    await startExport(page)
     await expect(page.getByRole('dialog', { name: 'Exporting video' })).toBeVisible()
     await expect(page.getByRole('button', { name: 'Export', exact: true })).toBeEnabled({ timeout: 60_000 })
     await expect.poll(() => existsSync(output), { timeout: 5_000 }).toBe(true)

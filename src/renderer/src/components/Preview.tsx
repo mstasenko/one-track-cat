@@ -23,7 +23,7 @@ import { incomingTransitionMedia, secondaryPreviewMedia } from './preview-media'
 import type { RenderedFacePreview } from '../model/use-face-preview'
 import { videoRangeStyleAtTime } from '../model/video-range-transition'
 import { isShortCanvas } from '@shared/short-frame'
-import { previewContext, previewSeekTime, previewSourceFps, shortFrameGuideStyle, previewAudioCut } from './preview-context'
+import { previewContext, previewSeekTime, previewSourceFps, shortFrameGuideRect, shortFrameGuideStyle, previewAudioCut } from './preview-context'
 import { ShortSourceBackdrop } from './ShortSourceBackdrop'
 
 export interface PreviewProps {
@@ -55,7 +55,7 @@ export interface PreviewProps {
 
 
 function focusCameraStyle(session: EditSession, outputTime: number): React.CSSProperties | undefined {
-  const transform = focusCameraTransformAtTime(session.focusZooms, outputTime)
+  const transform = focusCameraTransformAtTime(session.focusZooms, outputTime, shortFrameGuideRect(session, outputTime))
   return transform ? { transform, transformOrigin: 'top left' } : undefined
 }
 
@@ -338,7 +338,7 @@ function SourcePreview(props: SourcePreviewProps): React.JSX.Element {
   />
 
   return <>
-    <div className="camera-layer" style={short ? undefined : focusCameraStyle(props.session, visualTime)}>
+    <div className="camera-layer" style={focusCameraStyle(props.session, visualTime)}>
       <OutgoingTransitionVideo
         preview={transitionPreview}
         playing={props.playing}

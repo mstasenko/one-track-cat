@@ -36,7 +36,7 @@ vi.mock('./face-process', async () => {
       executable,
       args: [
         '-hide_banner', '-loglevel', 'error', '-filter_threads', '4', '-threads', '4',
-        '-f', 'rawvideo', '-pixel_format', 'rgb24', '-video_size', '64x64', '-framerate', '10',
+        '-f', 'rawvideo', '-pixel_format', 'nv12', '-video_size', '64x64', '-framerate', '10',
         '-i', 'pipe:0', '-an', '-c:v', 'libx264', '-preset', 'ultrafast', '-t', '1', '-f', 'nut', 'pipe:1'
       ]
     }
@@ -59,7 +59,7 @@ afterEach(async () => {
 })
 
 describe('privileged ordinary-video transport', () => {
-  it('round-trips RGB frames through NUT and remuxes AAC without GPU access', async () => {
+  it('round-trips NV12 frames through NUT and remuxes AAC without GPU access', async () => {
     directory = await mkdtemp(join(tmpdir(), 'otc-privileged-export-'))
     const output = join(directory, 'out.mp4')
     const request: ExportRequest = {

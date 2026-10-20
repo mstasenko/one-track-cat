@@ -3,6 +3,7 @@ import { app } from 'electron'
 import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import type { ExportRequest } from '../types'
+import { focusZoomDefaultTransitionDuration } from '../focus-zoom'
 import { timelineDuration } from '../segment-time'
 import { ffmpegPath } from './binaries'
 import { requireFacePack } from './face-pack'
@@ -94,7 +95,12 @@ export async function snapshotFacePreview(request: ExportRequest): Promise<strin
   const paths = requestPaths(request, pack)
   const stamps = await Promise.all(paths.map(async (path) => ({ path, stamp: await fileStamp(path) })))
   if (stamps.some(({ stamp }) => stamp === undefined)) return undefined
-  const serializedRequest = JSON.stringify({ ...request, outputPath: undefined })
+  // Old projects omit this field. Include the effective default so pre-change
+  // renders/detections cannot be reused with the new, slower camera ramps.
+  const focusZooms = request.focusZooms?.map((effect) => ({
+    ...effect, transitionDuration: effect.transitionDuration ?? focusZoomDefaultTransitionDuration
+  }))
+  const serializedRequest = JSON.stringify({ ...request, ...(focusZooms?.length ? { focusZooms } : {}), outputPath: undefined })
   return createHash('sha256').update(serializedRequest).update(JSON.stringify(stamps)).digest('hex')
 }
 

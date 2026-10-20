@@ -62,16 +62,19 @@ export function privilegedVideoEncoderCommand(
   canvas: Pick<ProjectCanvas, 'width' | 'height' | 'fps'>,
   duration: number,
   renderNode: string,
-  hardwareExecutable: string
+  hardwareExecutable: string,
+  pixelFormat: 'rgb24' | 'nv12' = 'rgb24',
+  frames?: number
 ): FaceCommand {
+  // Face and AI workers emit RGB24; ordinary export opts into NV12 below.
   const candidateArgs = vaapiCodecs.flatMap((codec) => {
     const probe = [hardwareExecutable, ...vaapiProbeArgs(renderNode, codec)]
     const stream = [
       hardwareExecutable, '-hide_banner', '-loglevel', 'error', '-filter_threads', '4', '-threads', '4',
       '-vaapi_device', renderNode,
-      '-f', 'rawvideo', '-pixel_format', 'rgb24', '-video_size', `${canvas.width}x${canvas.height}`, '-framerate', String(canvas.fps),
+      '-f', 'rawvideo', '-pixel_format', pixelFormat, '-video_size', `${canvas.width}x${canvas.height}`, '-framerate', String(canvas.fps),
       '-i', 'pipe:0', '-an', '-vf', 'format=nv12,hwupload', ...vaapiCodecOutput(codec),
-      '-t', String(duration), '-f', 'nut', 'pipe:1'
+      ...(frames === undefined ? ['-t', String(duration)] : ['-frames:v', String(frames)]), '-f', 'nut', 'pipe:1'
     ]
     return [String(probe.length), ...probe, String(stream.length), ...stream]
   })
@@ -131,10 +134,10 @@ function privilegedPipelineCommands(
   return [
     { executable: normalExecutable, args: [
       ...inputArgs, '-y', '-filter_complex_threads', '4', '-filter_complex', filter.graph,
-      '-map', `[${filter.videoLabel}]`, '-t', String(duration), '-an', '-pix_fmt', 'rgb24', '-threads', '2', '-f', 'rawvideo', 'pipe:1',
+      '-map', `[${filter.videoLabel}]`, '-t', String(duration), '-an', '-pix_fmt', 'nv12', '-threads', '2', '-f', 'rawvideo', 'pipe:1',
       '-map', `[${filter.audioLabel}]`, '-t', String(duration), '-vn', '-c:a', 'aac', '-b:a', '256k', audio
     ] },
-    privilegedVideoEncoderCommand({ width, height, fps }, duration, renderNode, hardwareExecutable),
+    privilegedVideoEncoderCommand({ width, height, fps }, duration, renderNode, hardwareExecutable, 'nv12'),
     nutVideoRemuxCommand(video, normalExecutable)
   ]
 }

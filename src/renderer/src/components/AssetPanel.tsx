@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { AssetItem, EditSession, FaceBlurEffect, FaceBlurSettings, FocusZoomAmount, FreezeDuration, InsertTransitions, TransitionEffect, VideoSpeed, VideoTransition } from '@shared/types'
 import { focusZoomAmounts, freezeDurations, videoSpeeds } from '@shared/types'
+import { focusZoomDefaultTransitionDuration, focusZoomMaxTransitionDuration, focusZoomMinTransitionDuration } from '@shared/focus-zoom'
 import { deletionRange, isFreezeSegment, positionAtOutputTime, segmentPlaybackRate, timelineDuration } from '../model/timeline'
 import { transitionAtOutputTime } from '../model/transitions'
 import { replayEligibility } from '../model/replay'
@@ -8,6 +9,7 @@ import { segmentsForOutputRange } from '../model/segment-ranges'
 import { useMediaUrl } from './useMediaUrl'
 import { FaceBlurPanel } from './FaceBlurPanel'
 import { OnlineTemplates } from './OnlineTemplates'
+import { NumberControl } from './NumberControl'
 
 export type AssetCategory = Exclude<AssetItem['type'], 'gif'>
 
@@ -22,7 +24,7 @@ interface AssetPanelProps {
   onAsset: (asset: AssetItem) => void
   onError: (message: string) => void
   onSpeed: (rate: VideoSpeed) => void
-  onFocusPick: (zoom: FocusZoomAmount) => void
+  onFocusPick: (zoom: FocusZoomAmount, transitionDuration: number) => void
   onRemoveFocusZoom: () => void
   onVideoTransition?: (into?: VideoTransition, out?: VideoTransition) => void
   onFreeze: (duration: FreezeDuration) => void
@@ -169,11 +171,13 @@ function SpeedOptions({ session, onBack, onSpeed }: Pick<AssetPanelProps, 'sessi
 }
 
 function ZoomOptions(props: Pick<AssetPanelProps, 'session' | 'onFocusPick' | 'onRemoveFocusZoom'> & { onBack: () => void }): React.JSX.Element {
+  const [transitionDuration, setTransitionDuration] = useState(focusZoomDefaultTransitionDuration)
   const range = deletionRange(props.session)
   const active = Boolean(range && props.session.focusZooms.some((effect) => effect.start < range[1] && effect.start + effect.duration > range[0]))
   return <section className="asset-panel effect-menu"><EffectHeading title="Focus Zoom" onBack={props.onBack} />
     <p className="empty-note">Choose a zoom, then click what to focus on.</p>
-    <div className="effect-options">{focusZoomAmounts.map((zoom) => <button disabled={!range} key={zoom} onClick={() => props.onFocusPick(zoom)}>{zoom}×</button>)}</div>
+    <NumberControl label="Transition (seconds)" value={transitionDuration} min={focusZoomMinTransitionDuration} max={focusZoomMaxTransitionDuration} step={focusZoomMinTransitionDuration} onChange={setTransitionDuration} />
+    <div className="effect-options">{focusZoomAmounts.map((zoom) => <button disabled={!range} key={zoom} onClick={() => props.onFocusPick(zoom, transitionDuration)}>{zoom}×</button>)}</div>
     {active && <button className="wide-button" onClick={props.onRemoveFocusZoom}>Remove zoom</button>}
   </section>
 }

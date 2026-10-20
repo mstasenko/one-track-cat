@@ -11,7 +11,8 @@ import {
   ffmpeg,
   hover,
   main,
-  scroll
+  scroll,
+  startExport
 } from './support'
 
 function captureDiagnostics(window: import('@playwright/test').Page): string[] {
@@ -80,7 +81,7 @@ test('opens, edits, and exports real media', async () => {
   await click(window.getByRole('button', { name: 'Text', exact: true }))
   await window.getByRole('textbox', { name: 'Text' }).fill('E2E WORKS')
   const exportButton = window.getByRole('button', { name: 'Export', exact: true })
-  await click(exportButton)
+  await startExport(window)
   await expect(window.getByRole('dialog', { name: 'Exporting video' })).toBeVisible()
   await expect(exportButton).toBeEnabled({ timeout: 30_000 })
   await expect.poll(() => existsSync(output)).toBe(true)

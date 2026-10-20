@@ -219,6 +219,8 @@ const cacheIdentityFaceEffect: FaceBlurEffect = {
 function baseIdentityRequest(request: ExportRequest): ExportRequest {
   return {
     ...request,
+    // AI enhancement runs after face masking and must not invalidate detections.
+    aiEnhance: undefined,
     faceBlurs: [cacheIdentityFaceEffect]
   }
 }

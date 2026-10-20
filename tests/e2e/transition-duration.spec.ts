@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { click, completeVideoPicker, dismissHardwareWarningIfNeeded, e2eEnvironment, ffprobe, main, seekTimeline, syntheticVideo, videoFrame } from './support'
+import { click, completeVideoPicker, dismissHardwareWarningIfNeeded, e2eEnvironment, ffprobe, main, seekTimeline, startExport, syntheticVideo, videoFrame } from './support'
 
 interface ProbeResult {
   format: { duration: string }
@@ -90,7 +90,7 @@ test('offers five-second inserted-video transitions and fits the following clip'
     expect(Math.min(...samples.map((sample) => sample.outgoingTime))).toBeGreaterThan(0.2)
     expect(Math.max(...samples.map((sample) => sample.currentTime)) - Math.min(...samples.map((sample) => sample.currentTime))).toBeGreaterThan(0.3)
 
-    await click(page.getByRole('button', { name: 'Export', exact: true }))
+    await startExport(page)
     await expect(page.getByRole('dialog', { name: 'Exporting video' })).toBeVisible()
     await expect(page.getByRole('button', { name: 'Export', exact: true })).toBeEnabled({ timeout: 90_000 })
     await expect.poll(() => existsSync(output), { timeout: 5_000 }).toBe(true)

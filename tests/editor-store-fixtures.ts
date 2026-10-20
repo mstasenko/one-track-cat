@@ -3,7 +3,8 @@ import type { otcApi, MediaMetadata, SourceSegment, VideoSegment } from '@shared
 
 export const metadata: MediaMetadata = {
   path: '/source.mp4', name: 'source.mp4', size: 100, modifiedAt: 1, duration: 10,
-  width: 1280, height: 720, fps: 30, videoCodec: 'h264', hasAudio: true
+  width: 1280, height: 720, fps: 30, videoCodec: 'h264',
+  hasAudio: true
 }
 
 export function video(segment: SourceSegment | undefined): VideoSegment {
@@ -28,6 +29,7 @@ export function api(): otcApi {
     chooseExportPath: vi.fn().mockResolvedValue('/output.mp4'),
     exportVideo: vi.fn().mockResolvedValue(undefined),
     facePackStatus: vi.fn().mockResolvedValue({ available: false, message: 'Face model pack unavailable' }),
+    aiPackStatus: vi.fn().mockResolvedValue({ available: false, message: 'AI enhancement pack unavailable' }),
     previewFaces: vi.fn().mockResolvedValue('/preview.mp4'),
     restoreFacePreview: vi.fn().mockResolvedValue([]),
     loadSession: vi.fn().mockResolvedValue(null),

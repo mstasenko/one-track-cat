@@ -43,11 +43,14 @@ export function decoderCommand(
   inputArgs: string[],
   filter: { graph: string; videoLabel: string; audioLabel: string },
   duration: number,
-  audio: string
+  audio: string,
+  frames?: number
 ): FaceCommand {
   return { executable: ffmpegPath(), args: [
     ...inputArgs, '-y', '-filter_complex_threads', '4', '-filter_complex', filter.graph,
-    '-map', `[${filter.videoLabel}]`, '-t', String(duration), '-an', '-pix_fmt', 'rgb24', '-threads', '2', '-f', 'rawvideo', 'pipe:1',
+    // The AI worker owns the frame clock; resync can discard a padded zoom frame.
+    '-map', `[${filter.videoLabel}]`, ...(frames === undefined ? ['-t', String(duration)] : ['-frames:v', String(frames), '-fps_mode', 'passthrough']),
+    '-an', '-pix_fmt', 'rgb24', '-threads', '2', '-f', 'rawvideo', 'pipe:1',
     '-map', `[${filter.audioLabel}]`, '-t', String(duration), '-vn', '-c:a', 'aac', '-b:a', '256k', audio
   ] }
 }
@@ -58,13 +61,15 @@ export function rawVideoEncoderCommand(
   height: number,
   fps: number,
   duration: number,
-  video: string
+  video: string,
+  frames?: number
 ): FaceCommand {
   return {
     executable: encoder.executable,
     args: [
       ...encoder.input, '-hide_banner', '-y', '-f', 'rawvideo', '-pixel_format', 'rgb24', '-video_size', `${width}x${height}`,
-      '-framerate', String(fps), '-i', 'pipe:0', '-an', '-t', String(duration),
+      '-framerate', String(fps), '-i', 'pipe:0', '-an',
+      ...(frames === undefined ? ['-t', String(duration)] : ['-frames:v', String(frames)]),
       ...(encoder.rawVideoFilter ? ['-vf', encoder.rawVideoFilter] : []), ...encoder.output,
       '-progress', 'pipe:1', '-nostats', video
     ],

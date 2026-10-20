@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { click, dismissHardwareWarningIfNeeded, e2eEnvironment, ffmpeg, ffprobe, hover, main, meanPixelDifference, seekTimeline, syntheticVideo, videoFrame } from './support'
+import { click, dismissHardwareWarningIfNeeded, e2eEnvironment, ffmpeg, ffprobe, hover, main, meanPixelDifference, seekTimeline, startExport, syntheticVideo, videoFrame } from './support'
 
 async function displayedPlayhead(page: import('@playwright/test').Page): Promise<number> {
   const value = await page.locator('.timeline-time').textContent()
@@ -144,7 +144,7 @@ test('exports the real focus zoom and frozen frame', async () => {
     await click(page.getByRole('button', { name: 'Freeze', exact: true }))
     await click(page.getByRole('button', { name: '1s', exact: true }))
 
-    await click(page.getByRole('button', { name: 'Export', exact: true }))
+    await startExport(page)
     await expect(page.getByRole('dialog', { name: 'Exporting video' })).toBeVisible()
     await expect(page.getByRole('button', { name: 'Export', exact: true })).toBeEnabled({ timeout: 60_000 })
     expect(existsSync(output)).toBe(true)

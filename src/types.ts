@@ -57,6 +57,7 @@ export interface FocusZoomEffect {
   id: string
   start: number
   duration: number
+  transitionDuration?: number
   zoom: FocusZoomAmount
   focusX: number
   focusY: number
@@ -156,6 +157,15 @@ export interface ProjectCanvas {
   fit: 'contain' | 'cover'
   /** Legacy saved-project input; live sessions use shortFramePoints. */
   shortFramePosition?: number
+}
+
+export const aiTargetLongEdge = 3840
+export const aiTargetFps = 60
+export type AiEnhancementMode = 'turbo' | 'base'
+
+/** Export-only AI work selected by the user; the actual needs are bounded by the canvas. */
+export interface AiEnhancementOptions {
+  mode?: AiEnhancementMode
 }
 
 interface OverlayBase {
@@ -271,6 +281,8 @@ export interface ExportRequest {
   faceBlurs?: FaceBlurEffect[]
   videoTransitions?: VideoRangeTransition[]
   shortFramePoints?: ShortFramePoint[]
+  /** Export-only AI upscaling/interpolation; never persisted as a project edit. */
+  aiEnhance?: AiEnhancementOptions
 }
 
 export interface FacePreviewRequest extends ExportRequest {
@@ -306,7 +318,7 @@ export interface SavedSession extends SavedSessionSnapshot {
 
 export type JobKind = 'proxy' | 'export'
 
-export type JobPhase = 'queued' | 'starting' | 'preparing' | 'masking' | 'encoding' | 'finalizing' | 'complete'
+export type JobPhase = 'queued' | 'starting' | 'preparing' | 'masking' | 'enhancing' | 'encoding' | 'finalizing' | 'complete'
 export type HardwareLabel = 'CPU' | 'iGPU' | 'dGPU'
 
 export interface JobProgress {
@@ -338,6 +350,23 @@ export interface FacePackStatus {
   message: string
 }
 
+export interface AiPackStatus extends FacePackStatus {
+  downloadable?: boolean
+  downloadBytes?: number
+}
+
+export type AiModelDownloadPhase = 'downloading' | 'verifying' | 'preparing'
+
+export interface AiModelDownloadProgress {
+  phase: AiModelDownloadPhase
+  name: string
+  downloadedBytes: number
+  totalBytes: number
+  percent: number
+  bytesPerSecond: number | null
+  etaSeconds: number | null
+}
+
 export interface otcApi {
   openVideo: () => Promise<string | null>
   openVideoPath: (path: string) => Promise<string | VideoDirectory>
@@ -360,6 +389,10 @@ export interface otcApi {
   getGpuDiagnostics: () => Promise<GpuDiagnostics>
   facePackStatus: () => Promise<FacePackStatus>
   clearFaceCache: () => Promise<void>
+  aiPackStatus: (spatial?: boolean, mode?: AiEnhancementMode) => Promise<AiPackStatus>
+  startModelDownload?: (mode?: AiEnhancementMode) => Promise<void>
+  cancelModelDownload?: () => Promise<boolean>
+  subscribeModelDownload?: (callback: (progress: AiModelDownloadProgress) => void) => () => void
   previewFaces: (request: FacePreviewRequest) => Promise<string>
   restoreFacePreview: (request: ExportRequest) => Promise<FacePreviewResult[]>
   getPathUrl: (path: string) => Promise<string>

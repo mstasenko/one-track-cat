@@ -28,6 +28,7 @@ import { SessionPathRegistry } from './path-registry'
 import { svgDataUrl } from './svg'
 import {
   parseExportRequest,
+  parseAiEnhancementMode,
   parseJobId,
   parseMediaMetadata,
   parsePath,
@@ -36,6 +37,13 @@ import {
 import { referencedExportSources } from '../export-sources'
 import { facePackStatus } from './face-pack'
 import { previewFaces, restoreFaces } from './face-preview'
+import {
+  aiPackStatus,
+  cancelAiModelDownload,
+  shutdownAiModelDownload,
+  startAiModelDownload,
+  subscribeAiModelDownload
+} from './ai-pack'
 import { clearFaceCache } from './face-cache-cleanup'
 import { cancelFaceExport, shutdownFaceExports } from './face-process'
 import { initialVideoDirectory, listVideoDirectory } from './video-picker'
@@ -376,6 +384,13 @@ function registerIpc(
   ipcMain.handle('templates:open-page', (_event, source: unknown, id: unknown) =>
     shell.openExternal(templatePage(source, id)))
   ipcMain.handle('faces:pack-status', facePackStatus)
+  ipcMain.handle('ai:pack-status', (_event, spatial: unknown, mode: unknown) => {
+    if (spatial !== undefined && typeof spatial !== 'boolean') throw new Error('Invalid AI spatial requirement')
+    return aiPackStatus({ spatial, mode: parseAiEnhancementMode(mode) })
+  })
+  ipcMain.handle('ai:model-download:start', (_event, mode: unknown) =>
+    startAiModelDownload({ mode: parseAiEnhancementMode(mode) }))
+  ipcMain.handle('ai:model-download:cancel', () => cancelAiModelDownload())
   ipcMain.handle('faces:preview', (_event, value: unknown) => previewFaces(value, paths, trustedExport))
   ipcMain.handle('faces:restore', (_event, value: unknown) => restoreFaces(value, paths, trustedExport))
   ipcMain.handle('face-cache:clear', () => clearFaceCache())
@@ -428,6 +443,12 @@ async function startApplication(): Promise<void> {
     export: videos,
     media: downloads
   }, paths, requestedPath)
+  const removeModelDownloadProgress = subscribeAiModelDownload((progress) => {
+    for (const window of BrowserWindow.getAllWindows()) {
+      if (!window.isDestroyed()) window.webContents.send('ai:model-download:progress', progress)
+    }
+  })
+  app.once('will-quit', removeModelDownloadProgress)
   createWindow(paths, requestedPath)
 
   app.on('activate', () => {
@@ -450,7 +471,7 @@ app.on('before-quit', (event) => {
   event.preventDefault()
   if (shutdownStarted) return
   shutdownStarted = true
-  void Promise.all([shutdownProxyJobs(), jobs.shutdown(), shutdownFaceExports()]).then(
+  void Promise.all([shutdownProxyJobs(), jobs.shutdown(), shutdownFaceExports(), shutdownAiModelDownload()]).then(
     () => {
       shutdownComplete = true
       app.quit()

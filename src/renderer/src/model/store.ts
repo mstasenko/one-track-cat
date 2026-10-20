@@ -231,12 +231,12 @@ export const useEditorStore = create<EditorState>((set, get) => {
       return mutation(state, (session) => applySpeedToOutputRange(session, range[0], range[1], rate))
     })
   },
-  addFocusZoom(zoom, focusX, focusY) {
+  addFocusZoom(zoom, focusX, focusY, transitionDuration) {
     set((state) => {
       if (!state.session) return state
       const range = deletionRange(state.session)
       if (!range) return state
-      return mutation(state, (session) => addFocusZoom(session, range[0], range[1], zoom, focusX, focusY))
+      return mutation(state, (session) => addFocusZoom(session, range[0], range[1], zoom, focusX, focusY, transitionDuration))
     })
   },
   nudgeShortFrame(direction) {

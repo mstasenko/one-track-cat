@@ -22,16 +22,21 @@ export function previewSourceFps(session: EditSession, position: NonNullable<Ret
   return source ? source.metadata.fps : 0
 }
 
-export function shortFrameGuideStyle(session: EditSession, time: number): React.CSSProperties | undefined {
+export function shortFrameGuideRect(session: EditSession, time: number): ReturnType<typeof shortFrameRect> | undefined {
   if (!isShortCanvas(session.canvas)) return undefined
   const position = positionAtOutputTime(session.segments, time)
   const source = position ? sourceForSegment(session, position.segment) : null
   if (!source) return undefined
-  const rectangle = shortFrameRect(
+  return shortFrameRect(
     session.canvas,
     source.metadata,
     shortFramePositionAtTime(session.shortFramePoints ?? [], time, session.canvas.shortFramePosition)
   )
+}
+
+export function shortFrameGuideStyle(session: EditSession, time: number): React.CSSProperties | undefined {
+  const rectangle = shortFrameGuideRect(session, time)
+  if (!rectangle) return undefined
   return {
     left: `${rectangle.left * 100}%`,
     top: `${rectangle.top * 100}%`,

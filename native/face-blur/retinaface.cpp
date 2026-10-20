@@ -2,6 +2,7 @@
 #include "resize_bgr.hpp"
 
 #include <openvino/openvino.hpp>
+#include <openvino/runtime/intel_gpu/properties.hpp>
 
 #include <algorithm>
 #include <array>
@@ -131,11 +132,14 @@ void requireOutputShape(const ov::Output<const ov::Node>& output,
 ov::CompiledModel compileModel(ov::Core& core,
                                const std::filesystem::path& modelXml,
                                const std::string& device) {
-  core.set_property(device, ov::num_streams(1));
+  ov::AnyMap properties{ov::num_streams(1)};
   if (device == "CPU") {
-    core.set_property("CPU", ov::inference_num_threads(4));
+    properties.insert(ov::inference_num_threads(4));
+  } else {
+    properties.insert(ov::intel_gpu::hint::queue_throttle(
+        ov::intel_gpu::hint::ThrottleLevel::LOW));
   }
-  return core.compile_model(core.read_model(modelXml.string()), device);
+  return core.compile_model(core.read_model(modelXml.string()), device, properties);
 }
 
 }  // namespace
@@ -198,6 +202,7 @@ std::vector<std::string> openVinoDeviceCandidates(const std::string& requested) 
     } catch (const ov::Exception&) {
       name = device;
     }
+    if (lower(name).rfind("intel", 0U) != 0U) continue;
     try {
       isDiscrete = core.get_property(device, ov::device::type) == ov::device::Type::DISCRETE;
       hasDeviceType = true;

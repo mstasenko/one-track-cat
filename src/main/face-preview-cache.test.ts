@@ -62,6 +62,14 @@ afterEach(async () => {
 })
 
 describe('completed face preview cache', () => {
+  it('keys legacy close-ups by their effective ramp duration', async () => {
+    const effect = { id: 'zoom', start: 0, duration: 1, zoom: 2 as const, focusX: 0.5, focusY: 0.5 }
+    const key = await snapshotFacePreview({ ...request, focusZooms: [effect] })
+    expect(key).toBeTruthy()
+    expect(await snapshotFacePreview({ ...request, focusZooms: [{ ...effect, transitionDuration: 0.5 }] })).toBe(key)
+    expect(await snapshotFacePreview({ ...request, focusZooms: [{ ...effect, transitionDuration: 0.18 }] })).not.toBe(key)
+  })
+
   it('persists a bounded stamped range and reloads it after a module reset', async () => {
     const output = join(directory, 'face-preview', 'preview.mp4')
     await mkdir(join(directory, 'face-preview'), { recursive: true })

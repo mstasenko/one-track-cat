@@ -60,6 +60,18 @@ describe('IPC input validation', () => {
     for (const shortFramePosition of [-0.05, 1.05, Number.NaN]) {
       expect(() => parseExportRequest({ ...request, canvas: { ...request.canvas, shortFramePosition } })).toThrow('Short frame position')
     }
+    expect(parseExportRequest({ ...request, aiEnhance: {} })).toMatchObject({ aiEnhance: {} })
+    expect(parseExportRequest({ ...request, aiEnhance: { mode: 'turbo' } })).toMatchObject({ aiEnhance: { mode: 'turbo' } })
+    expect(parseExportRequest({ ...request, aiEnhance: { mode: 'base' } })).toMatchObject({ aiEnhance: { mode: 'base' } })
+    for (const value of [true, false, 'yes', null, [], 1]) {
+      expect(() => parseExportRequest({ ...request, aiEnhance: value })).toThrow('AI enhancement')
+    }
+    for (const value of [
+      { mode: 'rife' }, { mode: 'temporal' }, { mode: 'per-frame' }, { mode: null }, { mode: undefined },
+      { mode: 60 }, { mode: 'turbo', extra: true }, { spatial: true }
+    ]) {
+      expect(() => parseExportRequest({ ...request, aiEnhance: value })).toThrow('AI enhancement')
+    }
     expect(() => parseExportRequest({
       ...request,
       segments: [{ ...request.segments[0], kind: 'audio' }, request.segments[1]]
@@ -220,6 +232,10 @@ describe('IPC input validation', () => {
     expect(() => parseExportRequest({ ...request, segments: [{ ...request.segments[0], sourceTime: 4 }] })).toThrow('Freeze source time')
     expect(() => parseExportRequest({ ...request, focusZooms: [{ ...request.focusZooms[0], zoom: 1.25 }] })).toThrow('amount')
     expect(() => parseExportRequest({ ...request, focusZooms: [{ ...request.focusZooms[0], focusX: -1 }] })).toThrow('Focus x')
+    expect(parseExportRequest({ ...request, focusZooms: [{ ...request.focusZooms[0], transitionDuration: 0.35 }] }).focusZooms?.[0]?.transitionDuration).toBe(0.35)
+    for (const transitionDuration of [0.049, 5.001, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, null, '0.5']) {
+      expect(() => parseExportRequest({ ...request, focusZooms: [{ ...request.focusZooms[0], transitionDuration }] })).toThrow('transition duration')
+    }
     expect(() => parseExportRequest({ ...request, focusZooms: [request.focusZooms[0], { ...request.focusZooms[0], id: 'overlap' }] })).toThrow('overlap')
     expect(() => parseExportRequest({ ...request, segments: [{ ...request.segments[0], replayGroupId: 'bad replay!' }] })).toThrow('Replay group ID')
   })
@@ -290,11 +306,6 @@ describe('IPC input validation', () => {
     }).videoTransitions?.[0]?.into?.duration).toBe(12)
     const intoOnly = { id: transition.id, start: transition.start, duration: transition.duration, into: transition.into }
     expect(parseExportRequest({ ...request, videoTransitions: [intoOnly] }).videoTransitions).toEqual([intoOnly])
-    expect(() => parseExportRequest({ ...request, videoTransitions: 'bad' })).toThrow('array')
-    expect(() => parseExportRequest({ ...request, videoTransitions: [{ ...transition, start: 2 }] })).toThrow('past')
-    expect(() => parseExportRequest({ ...request, videoTransitions: [{ ...transition, into: { effect: 'wipeleft', duration: 0.5 } }] })).toThrow('not supported')
-    expect(() => parseExportRequest({ ...request, videoTransitions: [{ ...transition, into: undefined, out: undefined }] })).toThrow('start or end')
-    expect(() => parseExportRequest({ ...request, videoTransitions: [transition, { ...transition }] })).toThrow('unique')
     const earlier = { ...transition, id: 'earlier', start: 0.5, duration: 0.5 }
     const adjacent = { ...transition, id: 'adjacent', start: 1, duration: 0.5 }
     expect(parseExportRequest({ ...request, videoTransitions: [adjacent, earlier] }).videoTransitions?.map(({ id }) => id))
@@ -311,6 +322,11 @@ describe('IPC input validation', () => {
       ...request,
       videoTransitions: [earlier, { ...adjacent, id: 'just-overlap', start: 0.99989 }]
     })).toThrow('overlap')
+    expect(() => parseExportRequest({ ...request, videoTransitions: 'bad' })).toThrow('array')
+    expect(() => parseExportRequest({ ...request, videoTransitions: [{ ...transition, start: 2 }] })).toThrow('past')
+    expect(() => parseExportRequest({ ...request, videoTransitions: [{ ...transition, into: { effect: 'wipeleft', duration: 0.5 } }] })).toThrow('not supported')
+    expect(() => parseExportRequest({ ...request, videoTransitions: [{ ...transition, into: undefined, out: undefined }] })).toThrow('start or end')
+    expect(() => parseExportRequest({ ...request, videoTransitions: [transition, { ...transition }] })).toThrow('unique')
     expect(() => parseSavedSession({
       ...savedSnapshot(),
       videoTransitions: [
@@ -414,6 +430,7 @@ describe('IPC input validation', () => {
   it('validates restorable editor state', () => {
     const saved = savedSnapshot()
     expect(parseSavedSession(saved)).toEqual(saved)
+    expect(parseSavedSession({ ...saved, aiEnhance: {} })).not.toHaveProperty('aiEnhance')
     expect(parseSavedSession({ ...saved, dirty: true })).toEqual(saved)
     const legacyOverlay = {
       id: 'audio', type: 'audio', name: 'Effect', path: '/effect.wav', start: 2.5, duration: 1,
