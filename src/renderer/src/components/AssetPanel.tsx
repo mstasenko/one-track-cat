@@ -323,11 +323,14 @@ export function AssetPanel(props: AssetPanelProps): React.JSX.Element {
     preview.current = null
   }, [])
 
-  useEffect(() => {
-    if (!props.selectedFaceBlur) return
-    setEffect(null)
-    setInserting(false)
-  }, [props.selectedFaceBlur])
+  const [previousFaceBlur, setPreviousFaceBlur] = useState(props.selectedFaceBlur)
+  if (previousFaceBlur !== props.selectedFaceBlur) {
+    setPreviousFaceBlur(props.selectedFaceBlur)
+    if (props.selectedFaceBlur) {
+      setEffect(null)
+      setInserting(false)
+    }
+  }
 
   const togglePreview = async (asset: AssetItem): Promise<void> => {
     if (previewing === asset.path) {

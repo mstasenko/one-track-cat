@@ -141,6 +141,24 @@ export function AiExportDialog({
   const [downloadProgress, setDownloadProgress] = useState<AiModelDownloadProgress | null>(null)
   const [downloadActive, setDownloadActive] = useState(false)
   const [downloadError, setDownloadError] = useState<string | null>(null)
+  const resetKey = `${open}:${needsEnhancement}:${needsSpatial}:${spatialSupported}`
+  const [previousResetKey, setPreviousResetKey] = useState(resetKey)
+  if (previousResetKey !== resetKey) {
+    setPreviousResetKey(resetKey)
+    setSelection('off')
+    setOutputPath('')
+    setBrowsing(false)
+    setPathError(null)
+    setPackStatus(null)
+    setDownloadProgress(null)
+    setDownloadActive(false)
+    setDownloadError(null)
+  }
+  const [previousMode, setPreviousMode] = useState(selectedMode)
+  if (previousMode !== selectedMode) {
+    setPreviousMode(selectedMode)
+    setPackStatus(null)
+  }
 
   useEffect(() => {
     const dialog = dialogRef.current
@@ -154,14 +172,6 @@ export function AiExportDialog({
       }
     }
     if (!dialog) return cleanup
-    setSelection('off')
-    setOutputPath('')
-    setBrowsing(false)
-    setPathError(null)
-    setPackStatus(null)
-    setDownloadProgress(null)
-    setDownloadActive(false)
-    setDownloadError(null)
     if (!open) {
       if (dialog.open) dialog.close()
       return cleanup
@@ -177,7 +187,6 @@ export function AiExportDialog({
 
   useEffect(() => {
     let current = true
-    setPackStatus(null)
     if (!open || !needsEnhancement || !spatialSupported) return
     const status = needsSpatial ? getAiPackStatus(true, selectedMode) : getAiPackStatus(false)
     void status

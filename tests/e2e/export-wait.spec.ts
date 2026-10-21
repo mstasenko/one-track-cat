@@ -17,7 +17,7 @@ function animationNames(element: Element): string[] {
   })
 }
 
-test('shows a cancellable export wait animation and honors reduced motion', async () => {
+test('Cancel export; honor reduced motion', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'otc-export-wait-'))
   const input = syntheticVideo(directory)
   let app: ElectronApplication | undefined

@@ -418,6 +418,71 @@ describe('Preview late-frame handoff', () => {
     const fade = audioMixer.setGain.mock.calls.find(([media, gain, delay, duration]) =>
       media === fallback && gain === 0 && delay !== undefined && duration === 0.01)
     expect(fade).toBeDefined()
-    expect(fade?.[2]).toBeCloseTo(0.09, 6)
+    // The primary reaches the next join first; waiting for the lagging fallback
+    // would let its source be replaced before the fade finishes.
+    expect(fade?.[2]).toBeCloseTo(0.04, 6)
+  })
+
+  it('bridges audio through the incoming transition preloader until the primary is decoded', async () => {
+    const session = createSession(metadata)
+    const sourceId = session.sources[0]?.id
+    if (!sourceId) throw new Error('first source missing')
+    session.sources.push({
+      id: 'second-source', metadata: { ...metadata, path: '/second.mp4', name: 'second.mp4' },
+      playbackPath: '/second.mp4', waveform: []
+    })
+    session.segments = [
+      { id: 'first', sourceId, sourceStart: 0, sourceEnd: 4 },
+      { id: 'second', sourceId: 'second-source', sourceStart: 0, sourceEnd: 5, transition: { effect: 'fade', duration: 1 } }
+    ]
+    session.playhead = 3.75
+
+    const app = mount(session, true)
+    const primary = sourceVideo(app)
+    primary.play = vi.fn().mockResolvedValue(undefined)
+    mediaClock(primary, 3.75)
+    Object.defineProperty(primary, 'readyState', { configurable: true, value: 4 })
+    act(() => { primary.dispatchEvent(new Event('loadeddata')) })
+
+    const outgoing = app.querySelector('.preview-transition-previous')
+    if (!(outgoing instanceof HTMLVideoElement)) throw new Error('outgoing transition video missing')
+    outgoing.play = vi.fn().mockResolvedValue(undefined)
+    mediaClock(outgoing, 4)
+    Object.defineProperty(outgoing, 'readyState', { configurable: true, value: 2 })
+    const incoming = app.querySelector('.preview-transition-incoming')
+    if (!(incoming instanceof HTMLVideoElement)) throw new Error('incoming transition video missing')
+    incoming.play = vi.fn().mockResolvedValue(undefined)
+    mediaClock(incoming, 0)
+    Object.defineProperty(incoming, 'readyState', { configurable: true, value: 2 })
+    audioMixer.setGain.mockClear()
+
+    let presented: VideoFrameRequestCallback | undefined
+    Object.defineProperty(primary, 'requestVideoFrameCallback', {
+      configurable: true, value: vi.fn((callback: VideoFrameRequestCallback) => { presented = callback; return 1 })
+    })
+    Object.defineProperty(primary, 'readyState', { configurable: true, value: 1 })
+    const switched = { ...session, playhead: 4.25 }
+    await act(async () => {
+      root?.render(<Preview {...previewProps(switched, true)} />)
+      await Promise.resolve()
+    })
+    const lastGain = (media: HTMLVideoElement): unknown =>
+      audioMixer.setGain.mock.calls.filter(([target]) => target === media).at(-1)?.[1]
+    expect(lastGain(outgoing)).toBe(0)
+    expect(lastGain(incoming)).toBe(1)
+    expect(lastGain(primary)).toBe(0)
+
+    Object.defineProperty(primary, 'readyState', { configurable: true, value: 2 })
+    Object.defineProperty(primary, 'seeking', { configurable: true, value: false })
+    mediaClock(primary, 0.25)
+    act(() => { primary.dispatchEvent(new Event('loadeddata')) })
+    expect(lastGain(outgoing)).toBe(0)
+    expect(lastGain(incoming)).toBe(1)
+    expect(lastGain(primary)).toBe(0)
+    act(() => { presented?.(0, { mediaTime: 0.25 } as VideoFrameCallbackMetadata) })
+    expect(lastGain(outgoing)).toBe(0)
+    expect(lastGain(incoming)).toBe(0)
+    expect(lastGain(primary)).toBe(1)
+    expect(incoming.src).toContain('/second.mp4')
   })
 })

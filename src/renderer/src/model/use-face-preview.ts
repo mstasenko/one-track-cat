@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { EditSession, FaceBlurEffect, FacePreviewResult, JobProgress } from '@shared/types'
 import { prepareExportRequest } from './export-request'
 import { deletionRange, timelineDuration } from './timeline'
@@ -115,9 +115,11 @@ export function useFacePreview(
   const sessionRef = useRef(session)
   const jobRef = useRef(job)
   const errorRef = useRef(showError)
-  sessionRef.current = session
-  jobRef.current = job
-  errorRef.current = showError
+  useLayoutEffect(() => {
+    sessionRef.current = session
+    jobRef.current = job
+    errorRef.current = showError
+  }, [session, job, showError])
 
   // Preview scope is captured when start() is called, so playhead and panel/mark selection changes
   // do not invalidate an already rendered result.

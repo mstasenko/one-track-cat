@@ -13,6 +13,8 @@ import unittest
 from contextlib import redirect_stderr
 from unittest import mock
 
+from test_output import run_tests
+
 
 SPEC = importlib.util.spec_from_file_location(
     "build_openvino_gpu", Path(__file__).with_name("build-openvino-gpu.py"))
@@ -139,7 +141,11 @@ class OpenVinoGpuRecipeTests(unittest.TestCase):
             target.parent.mkdir(parents=True)
             target.write_text(fixture_original_from_patch(), encoding="utf-8")
 
-            staged = recipe._prepare_source(source, root / "build", "pristine")
+            run = recipe._run
+            def capture_run(command, **kwargs):
+                return run(command, **{**kwargs, "capture": True})
+            with mock.patch.object(recipe, "_run", side_effect=capture_run):
+                staged = recipe._prepare_source(source, root / "build", "pristine")
             staged_target = staged / recipe.PATCH_TARGET
             self.assertTrue(staged_target.is_file())
             self.assertEqual(recipe._sha256(staged_target),
@@ -250,4 +256,4 @@ class OpenVinoGpuRecipeTests(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    raise SystemExit(run_tests())

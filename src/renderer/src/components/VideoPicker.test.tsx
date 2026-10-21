@@ -311,6 +311,40 @@ describe('VideoPicker', () => {
     await expect(choice).resolves.toBeNull()
   })
 
+  it('navigates into a folder and back without retaining its preview', async () => {
+    const { app } = mount()
+    await flush()
+    const nested: VideoDirectory = { path: '/videos/Clips', parent: '/videos', truncated: false, entries: [] }
+    api.listVideoDirectory.mockResolvedValueOnce(nested)
+    const folder = [...app.querySelectorAll('button')].find((button) => button.title === nested.path)
+    if (!folder) throw new Error('Folder button missing')
+    act(() => { pointerEnter(videoButton(app)) })
+    act(() => { folder.click() })
+    await flush()
+    expect(api.listVideoDirectory).toHaveBeenLastCalledWith(nested.path)
+    expect(app.querySelector('.video-picker-status')?.textContent).toBe('No videos in this folder.')
+    await act(async () => { await vi.advanceTimersByTimeAsync(150) })
+    expect(api.authorizeVideo).not.toHaveBeenCalled()
+    const up = app.querySelector('[aria-label="Go to parent folder"]')
+    if (!(up instanceof HTMLButtonElement)) throw new Error('Parent button missing')
+    act(() => { up.click() })
+    await flush()
+    expect(api.listVideoDirectory).toHaveBeenLastCalledWith('/videos')
+    expect(videoButton(app).textContent).toContain('clip.mp4')
+  })
+
+  it('reports a folder read failure and lets the user cancel', async () => {
+    api.listVideoDirectory.mockRejectedValueOnce(new Error('permission denied'))
+    const { app, choice } = mount()
+    await flush()
+    expect(app.querySelector('[role="alert"]')?.textContent).toContain('permission denied')
+    expect(app.querySelector('[aria-busy="true"]')).toBeNull()
+    const cancel = [...app.querySelectorAll('button')].find((button) => button.textContent === 'Cancel')
+    if (!cancel) throw new Error('Cancel button missing')
+    act(() => { cancel.click() })
+    await expect(choice).resolves.toBeNull()
+  })
+
   it('does not reveal a directory response that arrives after cancellation', async () => {
     let resolveDirectory!: (value: VideoDirectory) => void
     api.listVideoDirectory.mockReturnValueOnce(new Promise<VideoDirectory>((resolve) => { resolveDirectory = resolve }))

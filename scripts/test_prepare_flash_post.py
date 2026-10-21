@@ -782,4 +782,5 @@ class PrepareFlashPostCpuTests(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main(verbosity=2)
+    from test_output import run_tests
+    raise SystemExit(run_tests())

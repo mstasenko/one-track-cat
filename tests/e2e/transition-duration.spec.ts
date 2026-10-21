@@ -20,7 +20,7 @@ function meanBrightness(frame: Buffer): number {
   return frame.reduce((sum, value) => sum + value, 0) / Math.max(1, frame.length)
 }
 
-test('offers five-second inserted-video transitions and fits the following clip', async () => {
+test('Five-second transitions fit the next clip', async () => {
   test.setTimeout(120_000)
   const directory = mkdtempSync(join(tmpdir(), 'otc-transition-duration-'))
   const input = syntheticVideo(directory)

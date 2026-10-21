@@ -344,7 +344,7 @@ export async function requireAiPack(options: AiPackOptions = {}): Promise<AiPack
     return { ...runtime, models: root, mode }
   } catch (error) {
     if (error instanceof Error && error.message === legacySeedPackMessage) throw error
-    throw new Error(missingPackMessage)
+    throw new Error(missingPackMessage, { cause: error })
   }
 }
 

@@ -56,6 +56,8 @@ interface PreloadProps {
   showFallback: boolean
   audibleFallback: boolean
   fallbackGain: number
+  audioCutTime?: number
+  audioClockRef?: React.RefObject<HTMLVideoElement | null>
   mixer: PreviewAudioMixer
 }
 
@@ -132,6 +134,16 @@ afterEach(() => {
 })
 
 describe('OutgoingTransitionVideo', () => {
+  it('registers a decoder with the mixer when media becomes available again', () => {
+    const { mixer } = makeMixer()
+    mountPreload(preloadProps(mixer))
+    expect(mixer.register).toHaveBeenCalledTimes(1)
+    renderPreload(preloadProps(mixer, { preloadPath: '' }))
+    renderPreload(preloadProps(mixer, { preloadPath: 'media://second.mp4' }))
+    expect(mixer.register).toHaveBeenCalledTimes(2)
+    expect(mixer.register).toHaveBeenLastCalledWith(container?.querySelector('video'))
+  })
+
   it('keeps a preloaded incoming clip ready for the first transition frame', () => {
     container = document.createElement('div')
     document.body.append(container)
@@ -326,6 +338,26 @@ describe('OutgoingTransitionVideo', () => {
     await flushPlayback()
     expect(harness.setGain).toHaveBeenLastCalledWith(harness.video, 1)
   })
+
+  it.each([{ fallbackTime: 2.87, delay: 0.04 }, { fallbackTime: 2.98, delay: 0.01 }])(
+    'fades before either decoder reaches the cut with fallback at $fallbackTime', async ({ fallbackTime, delay }) => {
+      const harness = preparePreloaded()
+      harness.video.play = vi.fn().mockResolvedValue(undefined)
+      const primary = document.createElement('video')
+      mediaClock(primary, 2.95)
+      const fallbackClock = mediaClock(harness.video, fallbackTime)
+      renderPreload(preloadProps(harness.mixer, {
+        playing: true, preloadRate: 1, showFallback: true, audibleFallback: true,
+        audioCutTime: 3, audioClockRef: { current: primary }
+      }))
+      fallbackClock.setTime(fallbackTime)
+      await flushPlayback()
+      const call = harness.setGain.mock.calls.at(-1)
+      expect(call?.[0]).toBe(harness.video)
+      expect(call?.[1]).toBe(0)
+      expect(call?.[2]).toBeCloseTo(delay)
+      expect(call?.[3]).toBe(0.01)
+    })
 
   it('keeps a fallback muted when playback is rejected', async () => {
     const harness = preparePreloaded()

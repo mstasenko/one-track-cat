@@ -7,7 +7,7 @@ function activeExportJob(job: JobProgress | null): JobProgress | null {
 
 function progressMessage(job: JobProgress | null): string {
   const message = job?.message ?? 'Preparing export…'
-  if (!job || job.phase !== 'encoding' || !/^\d+%$/.test(message)) return message
+  if (job?.phase !== 'encoding' || !/^\d+%$/.test(message)) return message
   const hardware = job.encodingHardwareLabel ?? job.hardwareLabel
   return hardware ? `Encoding video using ${hardware}: ${message}` : `Encoding video: ${message}`
 }

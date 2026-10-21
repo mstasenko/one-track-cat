@@ -87,6 +87,18 @@ export function OnlineTemplates({ category, query, projectId, onAsset, onError, 
   const activePreviewKeyRef = useRef<string | null>(null)
   const hoveredTemplateRef = useRef<OnlineTemplate | null>(null)
   const focusedTemplateRef = useRef<OnlineTemplate | null>(null)
+  const searchKey = JSON.stringify([category, query, projectId, retryGeneration])
+  const [previousSearchKey, setPreviousSearchKey] = useState('')
+  if (previousSearchKey !== searchKey) {
+    setPreviousSearchKey(searchKey)
+    setResults(emptyResults())
+    const pending = emptyFlags()
+    if (query.trim().length >= 2) for (const source of providerList(category)) pending[source] = true
+    setLoading(pending)
+    setProviderErrors(emptyErrors())
+    setAddingKey(null)
+    setPreview(null)
+  }
 
   const releaseMedia = useCallback((): void => {
     releasePreviewMedia(previewMediaRef.current)
@@ -125,22 +137,16 @@ export function OnlineTemplates({ category, query, projectId, onAsset, onError, 
     const generation = ++requestGenerationRef.current
     const trimmedQuery = query.trim()
     const activeProviders = providerList(category)
-    setResults(emptyResults())
-    setLoading(emptyFlags())
-    setProviderErrors(emptyErrors())
     addingKeyRef.current = null
-    setAddingKey(null)
     hoveredTemplateRef.current = null
     focusedTemplateRef.current = null
-    clearPreview()
+    releaseMedia()
+    activePreviewKeyRef.current = null
 
     if (trimmedQuery.length < 2) {
       return () => { requestGenerationRef.current += 1 }
     }
 
-    const pendingFlags = emptyFlags()
-    for (const source of activeProviders) pendingFlags[source] = true
-    setLoading(pendingFlags)
     const timer = setTimeout(() => {
       for (const source of activeProviders) {
         if (requestGenerationRef.current !== generation) return
@@ -170,7 +176,7 @@ export function OnlineTemplates({ category, query, projectId, onAsset, onError, 
       clearTimeout(timer)
       requestGenerationRef.current += 1
     }
-  }, [category, clearPreview, projectId, query, retryGeneration])
+  }, [category, releaseMedia, projectId, query, retryGeneration])
 
   useEffect(() => () => {
     requestGenerationRef.current += 1

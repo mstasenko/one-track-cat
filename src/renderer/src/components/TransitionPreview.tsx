@@ -15,16 +15,18 @@ interface TransitionVideoProps {
   audibleFallback?: boolean
   fallbackGain?: number
   audioCutTime?: number
+  audioClockRef?: React.RefObject<HTMLVideoElement | null>
   mixer?: PreviewAudioMixer
   mediaRef?: React.RefObject<HTMLVideoElement | null>
   onPresentedTime?: (sourceTime: number, path: string) => void
 }
 
-function TransitionVideo({ side, preview, fit, objectPosition, className, playing = false, preloadPath = '', preloadTime = 0, preloadRate = 0, showFallback = false, audibleFallback = false, fallbackGain = 1, audioCutTime, mixer, mediaRef, onPresentedTime }: TransitionVideoProps & {
+function TransitionVideo({ side, preview, fit, objectPosition, className, playing = false, preloadPath = '', preloadTime = 0, preloadRate = 0, showFallback = false, audibleFallback = false, fallbackGain = 1, audioCutTime, audioClockRef, mixer, mediaRef, onPresentedTime }: TransitionVideoProps & {
   side: 'current' | 'previous'
 }): React.JSX.Element | null {
   const videoRef = useRef<HTMLVideoElement>(null)
   const path = preview?.[`${side}Path`] ?? preloadPath
+  const hasMedia = Boolean(path)
   const active = Boolean(preview) || showFallback
   const sourceTime = preview?.[`${side}SourceTime`] ?? preloadTime
   const rate = preview?.[`${side}PlaybackRate`] ?? preloadRate
@@ -32,8 +34,10 @@ function TransitionVideo({ side, preview, fit, objectPosition, className, playin
   const latestTime = useRef(sourceTime)
   const pendingSeekTime = useRef<number | null>(null)
   const onPresentedTimeRef = useRef(onPresentedTime)
-  latestTime.current = sourceTime
-  onPresentedTimeRef.current = onPresentedTime
+  useLayoutEffect(() => {
+    latestTime.current = sourceTime
+    onPresentedTimeRef.current = onPresentedTime
+  }, [sourceTime, onPresentedTime])
   const markReady = (): void => {
     const video = videoRef.current
     const tolerance = playing ? 0.25 : 0.001
@@ -49,7 +53,7 @@ function TransitionVideo({ side, preview, fit, objectPosition, className, playin
   useEffect(() => {
     const video = videoRef.current
     return video && mixer ? mixer.register(video) : undefined
-  }, [mixer])
+  }, [mixer, hasMedia])
 
   useEffect(() => {
     const video = videoRef.current
@@ -70,12 +74,15 @@ function TransitionVideo({ side, preview, fit, objectPosition, className, playin
     void video.play().then(() => {
       if (cancelled) return
       if (audioCutTime !== undefined) {
-        const delay = (audioCutTime - video.currentTime) / rate - 0.01
+        // The primary decoder replaces both sources at the join. Finish the fade
+        // before either decoder reaches it, including a late-starting fallback.
+        const clockTime = Math.max(video.currentTime, audioClockRef?.current?.currentTime ?? video.currentTime)
+        const delay = (audioCutTime - clockTime) / rate - 0.01
         mixer.setGain(video, 0, delay, 0.01)
       } else mixer.setGain(video, fallbackGain)
     }).catch(() => undefined)
     return () => { cancelled = true }
-  }, [path, playing, rate, audibleFallback, fallbackGain, audioCutTime, mixer])
+  }, [path, playing, rate, audibleFallback, fallbackGain, audioCutTime, audioClockRef, mixer])
 
   useLayoutEffect(() => {
     const video = videoRef.current

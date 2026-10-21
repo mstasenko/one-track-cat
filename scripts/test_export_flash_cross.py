@@ -181,4 +181,5 @@ class ExportFlashCrossCpuTests(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    from test_output import run_tests
+    raise SystemExit(run_tests())

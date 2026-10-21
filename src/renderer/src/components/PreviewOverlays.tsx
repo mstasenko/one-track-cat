@@ -3,7 +3,7 @@ import type { EditSession, Overlay, ProjectCanvas, VisualOverlayBase } from '@sh
 import { overlayFit } from '@shared/overlay-fit'
 import { overlayAtTime, overlaySourceTime } from '../model/timeline'
 import { isAudioEnabledOverlay, overlayGainAtLocalTime } from '@shared/audio-envelope'
-import { overlayNeedsResync } from './preview-media'
+import { mediaSource, overlayNeedsResync } from './preview-media'
 import type { PreviewAudioMixer } from './usePreviewAudioMixer'
 import { useMediaUrl } from './useMediaUrl'
 import { overlayAnimationStyle } from './overlay-animation'
@@ -80,7 +80,7 @@ function TextContent({ overlay, outputTime }: {
 
 function ImageContent({ overlay, outputTime }: { overlay: Extract<Overlay, { type: 'image' }>; outputTime: number }): React.JSX.Element {
   const url = useMediaUrl(overlayPath(overlay))
-  return <img src={url} alt={overlay.name} draggable={false} style={overlayAnimationStyle(overlay, outputTime)} />
+  return <img src={mediaSource(url)} alt={overlay.name} draggable={false} style={overlayAnimationStyle(overlay, outputTime)} />
 }
 
 function MediaContent({ overlay, outputTime, playing, mixer, canvas }: {
@@ -123,8 +123,8 @@ function MediaContent({ overlay, outputTime, playing, mixer, canvas }: {
     syncOverlayMedia(event.currentTarget, overlay, outputTime, playing)
   }
 
-  if (overlay.type === 'audio') return <audio ref={mediaRef as React.RefObject<HTMLAudioElement>} crossOrigin="anonymous" src={url} onLoadedMetadata={onLoadedMetadata} />
-  return <video ref={mediaRef as React.RefObject<HTMLVideoElement>} crossOrigin="anonymous" src={url} style={{ objectFit: overlayFit(overlay, canvas), ...overlayAnimationStyle(overlay, outputTime) }} muted={overlay.type === 'gif' || !overlay.audioEnabled} loop={overlay.type === 'gif' || overlay.loop} playsInline onLoadedMetadata={onLoadedMetadata} />
+  if (overlay.type === 'audio') return <audio ref={mediaRef} crossOrigin="anonymous" src={mediaSource(url)} onLoadedMetadata={onLoadedMetadata} />
+  return <video ref={mediaRef as React.RefObject<HTMLVideoElement>} crossOrigin="anonymous" src={mediaSource(url)} style={{ objectFit: overlayFit(overlay, canvas), ...overlayAnimationStyle(overlay, outputTime) }} muted={overlay.type === 'gif' || !overlay.audioEnabled} loop={overlay.type === 'gif' || overlay.loop} playsInline onLoadedMetadata={onLoadedMetadata} />
 }
 
 function OverlayContent(props: {
@@ -153,11 +153,11 @@ function VisualItem({ overlay, children, selected, props }: {
     if (drag.current) props.onChange(overlay.id, {
       x: Math.max(0, Math.min(1 - overlay.width, drag.current.x + (event.clientX - drag.current.startX) / rectangle.width)),
       y: Math.max(0, Math.min(1 - overlay.height, drag.current.y + (event.clientY - drag.current.startY) / rectangle.height))
-    } as Partial<Overlay>)
+    })
     if (resize.current) props.onChange(overlay.id, {
       width: Math.max(0.08, Math.min(1 - overlay.x, resize.current.width + (event.clientX - resize.current.x) / rectangle.width)),
       height: Math.max(0.08, Math.min(1 - overlay.y, resize.current.height + (event.clientY - resize.current.y) / rectangle.height))
-    } as Partial<Overlay>)
+    })
   }
   return <div
     className={`visual-overlay ${selected ? 'selected' : ''}`}

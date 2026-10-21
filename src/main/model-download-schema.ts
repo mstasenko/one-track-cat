@@ -151,7 +151,7 @@ export async function readModelManifest(path: string): Promise<ModelManifest> {
   try {
     value = JSON.parse(await readFile(path, 'utf8')) as unknown
   } catch (error) {
-    if (error instanceof SyntaxError) throw new Error('Invalid model manifest: malformed JSON')
+    if (error instanceof SyntaxError) throw new Error('Invalid model manifest: malformed JSON', { cause: error })
     throw error
   }
   return parseModelManifest(value)

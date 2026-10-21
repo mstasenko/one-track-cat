@@ -30,7 +30,7 @@ async function stepAndWait(
   }, sourceTime), { timeout: 15_000 }).toBe(true)
 }
 
-test('focus zoom and freeze stay compact and match the timeline hover preview', async () => {
+test('Zoom and freeze match hover preview', async () => {
   test.setTimeout(60_000)
   const directory = mkdtempSync(join(tmpdir(), 'otc-v2-effects-'))
   const input = syntheticVideo(directory)
@@ -123,7 +123,7 @@ test('focus zoom and freeze stay compact and match the timeline hover preview', 
   }
 })
 
-test('exports the real focus zoom and frozen frame', async () => {
+test('Export zoom and freeze', async () => {
   test.setTimeout(90_000)
   const directory = mkdtempSync(join(tmpdir(), 'otc-v2-export-'))
   const input = syntheticVideo(directory)

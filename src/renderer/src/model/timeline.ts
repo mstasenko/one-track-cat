@@ -253,7 +253,7 @@ function overlaysAfterInsertion(overlays: Overlay[], point: number, duration: nu
       start: point + duration,
       duration: rightDuration,
       ...(isSourceTimedOverlay(overlay) ? { sourceIn: overlay.sourceIn + leftDuration } : {})
-    } as Overlay
+    }
     return [{ ...overlay, duration: leftDuration }, right]
   })
 }

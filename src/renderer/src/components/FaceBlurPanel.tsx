@@ -27,6 +27,12 @@ const defaultFaceBlurDraft: FaceBlurDraft = {
   style: 'pixelate'
 }
 
+function draftForEffect(effect?: FaceBlurEffect | null): FaceBlurDraft {
+  if (!effect) return defaultFaceBlurDraft
+  const { sensitivity, detail, holdSeconds, strength, style } = effect
+  return { sensitivity, detail, holdSeconds, strength, style }
+}
+
 function clamp01(value: number): number {
   return Math.min(1, Math.max(0, Number.isFinite(value) ? value : 0))
 }
@@ -88,14 +94,13 @@ function FaceBlurControl({
 }
 
 export function FaceBlurPanel(props: FaceBlurPanelProps): React.JSX.Element {
-  const [draft, setDraft] = useState(defaultFaceBlurDraft)
+  const [draft, setDraft] = useState(() => draftForEffect(props.selectedEffect))
   const [packStatus, setPackStatus] = useState<FacePackStatus | null>(null)
   const [checkingPack, setCheckingPack] = useState(true)
   const totalDuration = useMemo(() => timelineDuration(props.session.segments), [props.session.segments])
 
   useEffect(() => {
     let current = true
-    setCheckingPack(true)
     void window.otc.facePackStatus()
       .then((status) => {
         if (!current) return
@@ -116,16 +121,13 @@ export function FaceBlurPanel(props: FaceBlurPanelProps): React.JSX.Element {
     : deletionRange(props.session)
   const range = faceBlurRange(selectedRange, totalDuration)
   const cannotApply = applyDisabled(checkingPack, packStatus, range)
-  useEffect(() => {
-    if (!selectedEffect) return
-    setDraft({
-      sensitivity: selectedEffect.sensitivity,
-      detail: selectedEffect.detail,
-      holdSeconds: selectedEffect.holdSeconds,
-      strength: selectedEffect.strength,
-      style: selectedEffect.style
-    })
-  }, [selectedEffect])
+  const [previousEffect, setPreviousEffect] = useState(selectedEffect)
+  if (previousEffect !== selectedEffect) {
+    setPreviousEffect(selectedEffect)
+    if (selectedEffect) {
+      setDraft(draftForEffect(selectedEffect))
+    }
+  }
   const changeDraft = <K extends keyof FaceBlurDraft>(key: K, value: FaceBlurDraft[K]): void => {
     setDraft((current) => ({ ...current, [key]: value }))
   }

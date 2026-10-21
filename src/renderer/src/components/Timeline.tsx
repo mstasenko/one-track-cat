@@ -196,11 +196,11 @@ function TimelineOverlay({ overlay, outputTime, frameHeight, canvas }: {
     </div>
   }
   if (overlay.type === 'image') {
-    return <div className="timeline-hover-overlay" style={style} aria-label={overlay.name}><img src={imageSource(overlay, url)} alt="" style={overlayAnimationStyle(overlay, outputTime)} /></div>
+    return <div className="timeline-hover-overlay" style={style} aria-label={overlay.name}><img src={imageSource(overlay, url) || undefined} alt="" style={overlayAnimationStyle(overlay, outputTime)} /></div>
   }
   return (
     <div className="timeline-hover-overlay" style={style} aria-label={overlay.name}>
-      <video ref={mediaRef} src={url} style={{ objectFit: overlayFit(overlay, canvas), ...overlayAnimationStyle(overlay, outputTime) }} muted playsInline preload="auto" />
+      <video ref={mediaRef} src={url || undefined} style={{ objectFit: overlayFit(overlay, canvas), ...overlayAnimationStyle(overlay, outputTime) }} muted playsInline preload="auto" />
     </div>
   )
 }

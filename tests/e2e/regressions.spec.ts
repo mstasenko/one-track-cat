@@ -42,7 +42,7 @@ function probe(path: string): { format: { duration: string }; streams: { codec_t
   return result as { format: { duration: string }; streams: { codec_type: string; width?: number; height?: number }[] }
 }
 
-test('plays from the point selected on the timeline', async () => {
+test('Play from timeline selection', async () => {
   const directory = temporaryDirectory('otc-seek-')
   const input = syntheticVideo(directory, true)
   const app = await launch(input)
@@ -55,7 +55,7 @@ test('plays from the point selected on the timeline', async () => {
   await expect.poll(() => preview.evaluate((video) => (video as HTMLVideoElement).currentTime)).toBeGreaterThan(3)
 })
 
-test('moves five seconds with arrow keys while paused or playing', async () => {
+test('Arrow keys seek five seconds', async () => {
   const directory = temporaryDirectory('otc-arrows-')
   const input = syntheticVideo(directory, true)
   const app = await launch(input)
@@ -71,7 +71,7 @@ test('moves five seconds with arrow keys while paused or playing', async () => {
   await expect.poll(() => preview.evaluate((video) => (video as HTMLVideoElement).currentTime)).toBeLessThan(2)
 })
 
-test('keeps timeline and zoom controls on the transport row', async () => {
+test('Transport controls stay aligned', async () => {
   const directory = temporaryDirectory('otc-zoom-')
   const input = syntheticVideo(directory, true)
   const app = await launch(input)
@@ -94,7 +94,7 @@ test('keeps timeline and zoom controls on the transport row', async () => {
   await expect.poll(() => timeline.evaluate((element) => (element as HTMLElement).style.width)).toBe('125%')
 })
 
-test('shows the source frame under the timeline pointer', async () => {
+test('Hover shows source frame', async () => {
   const directory = temporaryDirectory('otc-hover-preview-')
   const input = syntheticVideo(directory, true)
   const app = await launch(input)
@@ -114,7 +114,7 @@ test('shows the source frame under the timeline pointer', async () => {
   await expect(preview).toBeHidden()
 })
 
-test('highlights and cuts the chosen side of one mark without a popup', async () => {
+test('Remove either side of one mark', async () => {
   const directory = temporaryDirectory('otc-one-point-')
   const input = syntheticVideo(directory, true)
   const app = await launch(input)
@@ -138,7 +138,7 @@ test('highlights and cuts the chosen side of one mark without a popup', async ()
   await expect(window.getByRole('button', { name: 'Mark', exact: true })).toBeVisible()
 })
 
-test('supports more than two marks and selects the partition at the playhead', async () => {
+test('Select among multiple marks', async () => {
   const directory = temporaryDirectory('otc-two-points-')
   const input = syntheticVideo(directory, true)
   const app = await launch(input)
@@ -164,7 +164,7 @@ test('supports more than two marks and selects the partition at the playhead', a
   }))).toEqual({ left: 75, width: 25 })
 })
 
-test('keeps the preview healthy after repeated editing operations', async () => {
+test('Repeated edits preserve preview', async () => {
   const directory = temporaryDirectory('otc-edit-')
   const input = syntheticVideo(directory, true)
   const app = await launch(input)
@@ -188,7 +188,7 @@ test('keeps the preview healthy after repeated editing operations', async () => 
   ))).toBe(true)
 })
 
-test('renders added text into the exported video', async () => {
+test('Export text overlays', async () => {
   const directory = temporaryDirectory('otc-text-')
   const input = syntheticVideo(directory, true)
   const output = join(directory, 'output.mp4')
@@ -222,7 +222,7 @@ test('renders added text into the exported video', async () => {
   expect(frame.some((value) => value > 100)).toBe(true)
 })
 
-test('renders SVG library images into the exported video', async () => {
+test('Export SVG overlays', async () => {
   const directory = temporaryDirectory('otc-svg-')
   const input = syntheticVideo(directory, true)
   const output = join(directory, 'output.mp4')
@@ -242,7 +242,7 @@ test('renders SVG library images into the exported video', async () => {
   expect(frame.some((value) => value > 150)).toBe(true)
 })
 
-test('exports WebM video audio together with an OGG effect', async () => {
+test('Mix WebM audio with OGG', async () => {
   const directory = temporaryDirectory('media-export-')
   const input = syntheticVideo(directory, true)
   const output = join(directory, 'output.mp4')
@@ -267,7 +267,7 @@ test('exports WebM video audio together with an OGG effect', async () => {
   ])).not.toThrow()
 })
 
-test('prepares, restores, previews, and exports an external GIF', async () => {
+test('Import, restore and export GIF', async () => {
   const directory = temporaryDirectory('otc-gif-')
   const input = syntheticVideo(directory, true)
   const gif = join(directory, 'animated.gif')
@@ -303,7 +303,7 @@ test('prepares, restores, previews, and exports an external GIF', async () => {
   await expect.poll(() => existsSync(output), { timeout: 30_000 }).toBe(true)
 })
 
-test('blocks editing and removes partial output when export is cancelled', async () => {
+test('Cancel export; clean partial output', async () => {
   const directory = temporaryDirectory('otc-cancel-')
   const input = join(directory, 'long.mp4')
   const output = join(directory, 'cancelled.mp4')
@@ -327,7 +327,7 @@ test('blocks editing and removes partial output when export is cancelled', async
   await expect(window.getByText('OneTrackCat could not export this video. Check the destination and try again.')).toHaveCount(0)
 })
 
-test('ripple-inserts and exports a second main-timeline video', async () => {
+test('Insert and export second clip', async () => {
   test.setTimeout(60_000)
   const directory = temporaryDirectory('otc-insert-')
   const first = join(directory, 'first.mp4')
@@ -389,7 +389,7 @@ test('ripple-inserts and exports a second main-timeline video', async () => {
   expect(result.streams.some((stream) => stream.codec_type === 'audio')).toBe(true)
 })
 
-test('shows full source framing for a Short and fills its selected frame in export', async () => {
+test('Short: preview full source; export crop', async () => {
   // Headless Wayland pointer round trips consume time before export.
   test.setTimeout(90_000)
   const directory = temporaryDirectory('otc-short-')
@@ -435,7 +435,7 @@ test('shows full source framing for a Short and fills its selected frame in expo
   }
 })
 
-test('shows the cropped Short frame and active meme overlay in the timeline preview', async () => {
+test('Short: crop and meme overlay preview', async () => {
   const directory = temporaryDirectory('otc-short-hover-')
   const input = syntheticVideo(directory, true)
   const app = await launch(input, undefined, { otc_E2E_VIDEO: input })

@@ -174,7 +174,7 @@ test.afterEach(async () => {
   for (const directory of temporaryDirectories.splice(0)) rmSync(directory, { recursive: true, force: true })
 })
 
-test('Apply face blur adds the selected effect and previews fresh settings once', async () => {
+test('Apply selected face settings once', async () => {
   const directory = temporaryDirectory('otc-face-apply-')
   const input = syntheticVideo(directory, true)
   const app = await launch(input)
@@ -254,7 +254,7 @@ test('Apply face blur adds the selected effect and previews fresh settings once'
   await expect(page.locator('.preview-stage audio')).toHaveCount(audioOverlayCount)
 })
 
-test('restores an applied face preview after a normal-close relaunch without rendering again', async () => {
+test('Restore cached preview after reopening', async () => {
   const directory = temporaryDirectory('otc-face-restore-')
   const input = syntheticVideo(directory, true)
   const first = await launch(input)
@@ -304,7 +304,7 @@ test('restores an applied face preview after a normal-close relaunch without ren
   await expect.poll(async () => (await capturedRequests(restored)).length).toBe(0)
 })
 
-test('clicking a face marker preserves its range and keeps reapply paused', async () => {
+test('Select face range without playback', async () => {
   const directory = temporaryDirectory('otc-face-marker-')
   const input = syntheticVideo(directory, true)
   const app = await launch(input)
@@ -349,7 +349,7 @@ test('clicking a face marker preserves its range and keeps reapply paused', asyn
   await expect(page.locator('.preview-rendered-video')).toBeHidden()
 })
 
-test('cancelling a face preview keeps its timeline effect editable', async () => {
+test('Cancel preview; retain editable effect', async () => {
   const directory = temporaryDirectory('otc-face-apply-cancel-')
   const app = await launch(syntheticVideo(directory, true))
   const page = await app.firstWindow()
@@ -366,7 +366,7 @@ test('cancelling a face preview keeps its timeline effect editable', async () =>
   await expect(page.locator('.error-banner')).toHaveCount(0)
 })
 
-test('a face preview error keeps its timeline effect editable', async () => {
+test('Failed preview remains editable', async () => {
   const directory = temporaryDirectory('otc-face-apply-error-')
   const app = await launch(syntheticVideo(directory, true))
   const page = await app.firstWindow()

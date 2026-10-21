@@ -340,7 +340,7 @@ export async function runFacePipeline(
       // signal escalation; signalling a pkexec child can orphan its root
       // descendant and leave the render node occupied.
       for (const [index, child] of children.entries()) {
-        if (!child || child.exitCode !== null) continue
+        if (child?.exitCode !== null) continue
         if (index === 1 || commands[index]?.elevated || commands[index]?.gpuWorker) {
           child.stdin.end()
           child.stdout.resume()
@@ -350,7 +350,7 @@ export async function runFacePipeline(
       }
       timer ??= setTimeout(() => {
         for (const [index, child] of children.entries()) {
-          if (child && child.exitCode === null && index !== 1 && !commands[index]?.elevated && !commands[index]?.gpuWorker) {
+          if (child?.exitCode === null && index !== 1 && !commands[index]?.elevated && !commands[index]?.gpuWorker) {
             child.kill('SIGKILL')
           }
         }

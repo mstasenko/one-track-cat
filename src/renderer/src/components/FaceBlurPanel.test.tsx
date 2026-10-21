@@ -51,6 +51,13 @@ function labeledInput(app: HTMLDivElement, label: string): HTMLInputElement | HT
   return result
 }
 
+async function flushFacePackStatus(): Promise<void> {
+  await act(async () => {
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+}
+
 beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
   Object.defineProperty(window, 'otc', {
@@ -74,7 +81,8 @@ describe('face blur panel', () => {
       message: 'Install the optional face pack.'
     })
     const app = renderPanel()
-    await vi.waitFor(() => expect(app.textContent).toMatch(/Download and extract the face-pack/))
+    await flushFacePackStatus()
+    expect(app.textContent).toMatch(/Download and extract the face-pack/)
     expect(button(app, 'Apply face blur').disabled).toBe(true)
     expect(app.textContent).toMatch(/next to the OneTrackCat AppImage/)
   })
@@ -82,7 +90,8 @@ describe('face blur panel', () => {
   it('uses the requested defaults and sends edited settings', async () => {
     const onApply = vi.fn<(settings: FaceBlurSettings) => void>()
     const app = renderPanel(undefined, [], onApply)
-    await vi.waitFor(() => expect(button(app, 'Apply face blur').disabled).toBe(false))
+    await flushFacePackStatus()
+    expect(button(app, 'Apply face blur').disabled).toBe(false)
     expect((labeledInput(app, 'Sensitivity') as HTMLInputElement).value).toBe('0.01')
     expect((labeledInput(app, 'Small faces (slower)') as HTMLInputElement).checked).toBe(true)
     expect((labeledInput(app, 'Hold missed faces seconds') as HTMLInputElement).value).toBe('0.3')
@@ -118,7 +127,8 @@ describe('face blur panel', () => {
     }
     const onApply = vi.fn<(settings: FaceBlurSettings) => void>()
     const app = renderPanel(undefined, [selected], onApply, vi.fn(), selected)
-    await vi.waitFor(() => expect(button(app, 'Apply face blur').disabled).toBe(false))
+    await flushFacePackStatus()
+    expect(button(app, 'Apply face blur').disabled).toBe(false)
     const sensitivity = labeledInput(app, 'Sensitivity') as HTMLInputElement
     expect(sensitivity.value).toBe('0')
     expect(sensitivity.closest('label')?.querySelector('output')?.textContent).toBe('0%')
@@ -130,7 +140,8 @@ describe('face blur panel', () => {
   it('passes zero sensitivity when the default slider is moved to zero', async () => {
     const onApply = vi.fn<(settings: FaceBlurSettings) => void>()
     const app = renderPanel(undefined, [], onApply)
-    await vi.waitFor(() => expect(button(app, 'Apply face blur').disabled).toBe(false))
+    await flushFacePackStatus()
+    expect(button(app, 'Apply face blur').disabled).toBe(false)
     const sensitivity = labeledInput(app, 'Sensitivity') as HTMLInputElement
     expect(sensitivity.value).toBe('0.01')
     const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.bind(sensitivity)
@@ -159,7 +170,8 @@ describe('face blur panel', () => {
     session.playhead = 3
     const onRemove = vi.fn<(id: string) => void>()
     const app = renderPanel(session, session.faceBlurs, vi.fn(), onRemove)
-    await vi.waitFor(() => expect(button(app, 'Apply face blur').disabled).toBe(false))
+    await flushFacePackStatus()
+    expect(button(app, 'Apply face blur').disabled).toBe(false)
     expect(app.textContent).toContain('Apply to selected range.')
     expect(app.textContent).not.toMatch(/00:02.00 – 00:06.00|00:01.00 – 00:04.00/)
     expect(app.textContent).not.toMatch(/Face blur at the playhead|Selected face blur|No face blur at the playhead/)
@@ -172,7 +184,8 @@ describe('face blur panel', () => {
 
   it('labels an unselected preview as the entire video without the privacy warning', async () => {
     const app = renderPanel()
-    await vi.waitFor(() => expect(button(app, 'Apply face blur').disabled).toBe(false))
+    await flushFacePackStatus()
+    expect(button(app, 'Apply face blur').disabled).toBe(false)
     expect(app.textContent).toContain('Apply to entire video.')
     expect(app.textContent).not.toMatch(/00:00.00 – 00:10.00/)
     expect(app.textContent).not.toMatch(/Preview selected range|Preview entire video/)
@@ -188,7 +201,8 @@ describe('face blur panel', () => {
     }]
     session.playhead = 5
     const app = renderPanel(session, session.faceBlurs)
-    await vi.waitFor(() => expect(button(app, 'Apply face blur').disabled).toBe(false))
+    await flushFacePackStatus()
+    expect(button(app, 'Apply face blur').disabled).toBe(false)
     expect(app.textContent).not.toMatch(/Face blur at the playhead|No face blur at the playhead/)
     expect(app.querySelectorAll('.face-blur-effect')).toHaveLength(0)
     expect(app.querySelector('button[aria-label^="Remove face blur"]')).toBeNull()
@@ -204,7 +218,8 @@ describe('face blur panel', () => {
     const onApply = vi.fn<(settings: FaceBlurSettings) => void>()
     const onRemove = vi.fn<(id: string) => void>()
     const app = renderPanel(session, [selected], onApply, onRemove, selected)
-    await vi.waitFor(() => expect(button(app, 'Apply face blur').disabled).toBe(false))
+    await flushFacePackStatus()
+    expect(button(app, 'Apply face blur').disabled).toBe(false)
     expect(app.textContent).toContain('Apply to selected range.')
     expect(app.textContent).not.toMatch(/00:01.25 – 00:03.75/)
     expect(app.textContent).not.toMatch(/Selected face blur|Face blur at the playhead/)

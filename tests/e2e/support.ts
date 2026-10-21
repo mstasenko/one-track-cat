@@ -84,7 +84,10 @@ export async function startExport(page: Page, aiEnhance = false): Promise<void> 
     await expect(checkbox).toBeEnabled()
     await click(checkbox)
   }
-  await click(dialog.getByRole('button', { name: 'Start', exact: true }))
+  const start = dialog.getByRole('button', { name: 'Start', exact: true })
+  await expect(start).toBeEnabled()
+  // The asynchronous pack status can move this button after a forced pointer hit-test.
+  await start.press('Enter')
 }
 
 export async function completeVideoPicker(page: Page): Promise<void> {

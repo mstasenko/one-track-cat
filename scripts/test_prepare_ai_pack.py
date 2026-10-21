@@ -12,6 +12,8 @@ import unittest
 import zipfile
 from unittest import mock
 
+from test_output import run_tests
+
 spec = importlib.util.spec_from_file_location('prepare_ai_pack', Path(__file__).with_name('prepare-ai-pack.py'))
 recipe = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(recipe)
@@ -321,4 +323,4 @@ class FlashPackRecipeTests(unittest.TestCase):
 
 
 if __name__ == '__main__':
-    unittest.main()
+    raise SystemExit(run_tests())

@@ -8,6 +8,11 @@ export const overlaySyncTolerances = {
   visual: 0.18
 } as const
 
+// An absent source must omit src; an empty string makes React fetch the page itself.
+export function mediaSource(url: string): string | undefined {
+  return url || undefined
+}
+
 export function previewMediaVolume(volume: number): number {
   if (!Number.isFinite(volume)) return 1
   return Math.max(0, Math.min(1, volume))

@@ -66,6 +66,13 @@ function movePointer(timeline: Element, clientX: number): void {
   act(() => { timeline.dispatchEvent(event) })
 }
 
+async function flushMediaUrl(): Promise<void> {
+  await act(async () => {
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+}
+
 beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
   Object.defineProperty(window, 'otc', {
@@ -82,7 +89,7 @@ afterEach(() => {
 })
 
 describe('timeline hover overlay animation', () => {
-  it('matches the preview fade envelope for image and video content', () => {
+  it('matches the preview fade envelope for image and video content', async () => {
     for (const [overlay, selector] of [[imageOverlay(), '.timeline-hover-overlay img'], [videoOverlay(), '.timeline-hover-overlay video']] as const) {
       const session = createSession(metadata)
       session.overlays = [overlay]
@@ -95,6 +102,7 @@ describe('timeline hover overlay animation', () => {
       })
 
       movePointer(timeline, 0)
+      await flushMediaUrl()
       const mediaAt = (): HTMLImageElement | HTMLVideoElement => {
         const media = app.querySelector(selector)
         if (!(media instanceof HTMLImageElement) && !(media instanceof HTMLVideoElement)) throw new Error('hover media missing')
@@ -115,7 +123,7 @@ describe('timeline hover overlay animation', () => {
     }
   })
 
-  it('matches text animation transforms and custom visual fade timing for media hover', () => {
+  it('matches text animation transforms and custom visual fade timing for media hover', async () => {
     const cases = [
       { overlay: { ...imageOverlay(), animation: 'pop' as const }, selector: '.timeline-hover-overlay img', transform: 'scale(0.65)' },
       { overlay: { ...videoOverlay(), animation: 'bounce' as const }, selector: '.timeline-hover-overlay video', transform: 'scale(0.92)' }
@@ -131,6 +139,7 @@ describe('timeline hover overlay animation', () => {
         value: (): { left: number; width: number } => ({ left: 0, width: 100 })
       })
       movePointer(timeline, 0)
+      await flushMediaUrl()
       const media = app.querySelector(selector)
       if (!(media instanceof HTMLImageElement) && !(media instanceof HTMLVideoElement)) throw new Error('hover media missing')
       expect(media.style.opacity).toBe('0')
@@ -153,6 +162,7 @@ describe('timeline hover overlay animation', () => {
       value: (): { left: number; width: number } => ({ left: 0, width: 100 })
     })
     movePointer(timedTimeline, 100 * (0.05 / metadata.duration))
+    await flushMediaUrl()
     const timedMedia = timedApp.querySelector('.timeline-hover-overlay img')
     if (!(timedMedia instanceof HTMLImageElement)) throw new Error('timed hover image missing')
     expect(Number(timedMedia.style.opacity)).toBeCloseTo(0.5, 5)

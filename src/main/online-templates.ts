@@ -260,8 +260,7 @@ function wikimediaTemplate(value: unknown): OnlineTemplate | null {
   const mime = typeof info.mime === 'string' ? info.mime.split(';', 1)[0]?.trim().toLowerCase() ?? '' : ''
   const mediatype = typeof info.mediatype === 'string' ? info.mediatype.trim().toLowerCase() : ''
   if (
-    !parsedUrl
-    || parsedUrl.type !== 'audio'
+    parsedUrl?.type !== 'audio'
     || mediatype !== 'audio'
     || acceptedAudioMimes?.includes(mime) !== true
     || !wikimediaLicense(info)

@@ -61,6 +61,9 @@ function installAudioCapture({ startupDelayMs, workletUrl }: AudioCaptureOptions
         window.setTimeout(() => {
           void nativePlay.call(this).then(resolve, reject)
         }, startupDelayMs)
+      }).finally(() => {
+        // Coalesce pending starts, not later resumes after a pause or source change.
+        pendingPlays.delete(this)
       })
       pendingPlays.set(this, pending)
       return pending
@@ -123,10 +126,10 @@ for (const { transition, startupDelayMs } of [
 ] as const) {
   test(
     startupDelayMs > 0
-      ? 'keeps inserted-video preview audio routed through delayed fallback startup'
+      ? 'Delayed decoder startup'
       : transition === 'control'
-      ? 'keeps continuous first-clip preview audio stable without an insert'
-      : `keeps inserted-video preview audio audible through a ${transition} join`,
+      ? 'Continuous playback'
+      : `${transition} join`,
     async () => {
       test.setTimeout(60_000)
       const directory = mkdtempSync(join(tmpdir(), 'otc-audio-boundary-'))

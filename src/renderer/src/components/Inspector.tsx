@@ -20,10 +20,10 @@ function TextControls({ overlay, onChange, onAnimation, onPreviewAnimation }: Pi
   if (overlay.type !== 'text') return null
   return (
     <>
-      <label className="stacked-control"><span>Text</span><textarea autoFocus value={overlay.text} onFocus={(event) => event.currentTarget.select()} onChange={(e) => onChange({ text: e.target.value } as Partial<Overlay>)} /></label>
-      <label className="control-row"><span>Center text</span><input type="checkbox" checked={overlay.align === 'center'} onChange={(event) => onChange({ align: event.target.checked ? 'center' : 'left' } as Partial<Overlay>)} /></label>
-      <label className="control-row"><span>Font</span><select value={overlay.fontFamily} onChange={(e) => onChange({ fontFamily: e.target.value } as Partial<Overlay>)}>{fonts.map((font) => <option key={font}>{font}</option>)}</select></label>
-      <NumberControl label="Text size" value={overlay.fontSize} min={1} max={30} step={0.5} onChange={(fontSize) => onChange({ fontSize } as Partial<Overlay>)} />
+      <label className="stacked-control"><span>Text</span><textarea autoFocus value={overlay.text} onFocus={(event) => event.currentTarget.select()} onChange={(e) => onChange({ text: e.target.value })} /></label>
+      <label className="control-row"><span>Center text</span><input type="checkbox" checked={overlay.align === 'center'} onChange={(event) => onChange({ align: event.target.checked ? 'center' : 'left' })} /></label>
+      <label className="control-row"><span>Font</span><select value={overlay.fontFamily} onChange={(e) => onChange({ fontFamily: e.target.value })}>{fonts.map((font) => <option key={font}>{font}</option>)}</select></label>
+      <NumberControl label="Text size" value={overlay.fontSize} min={1} max={30} step={0.5} onChange={(fontSize) => onChange({ fontSize })} />
       <label className="control-row"><span>Animation</span><span className="compact-controls">
         <select value={overlay.animation ?? 'none'} onChange={(event) => onAnimation(event.target.value as TextAnimationPreset)}>
           {textAnimationPresets.map((preset) => <option key={preset} value={preset}>{preset[0]?.toUpperCase()}{preset.slice(1)}</option>)}
@@ -31,17 +31,17 @@ function TextControls({ overlay, onChange, onAnimation, onPreviewAnimation }: Pi
         <button disabled={!overlay.animation || overlay.animation === 'none'} onClick={onPreviewAnimation} aria-label="Preview text animation" title="Preview text animation">▶</button>
       </span></label>
       <AnimationTimingControls overlay={overlay} onChange={onChange} />
-      <label className="control-row"><span>Color</span><input type="color" value={overlay.color} onChange={(e) => onChange({ color: e.target.value } as Partial<Overlay>)} /></label>
-      <label className="control-row"><span>Outline</span><input type="color" value={overlay.outlineColor} onChange={(e) => onChange({ outlineColor: e.target.value } as Partial<Overlay>)} /></label>
-      <NumberControl label="Outline width" value={overlay.outlineWidth} min={0} max={12} step={1} onChange={(outlineWidth) => onChange({ outlineWidth } as Partial<Overlay>)} />
-      <label className="control-row"><span>Shadow</span><input type="checkbox" checked={overlay.shadow} onChange={(e) => onChange({ shadow: e.target.checked } as Partial<Overlay>)} /></label>
+      <label className="control-row"><span>Color</span><input type="color" value={overlay.color} onChange={(e) => onChange({ color: e.target.value })} /></label>
+      <label className="control-row"><span>Outline</span><input type="color" value={overlay.outlineColor} onChange={(e) => onChange({ outlineColor: e.target.value })} /></label>
+      <NumberControl label="Outline width" value={overlay.outlineWidth} min={0} max={12} step={1} onChange={(outlineWidth) => onChange({ outlineWidth })} />
+      <label className="control-row"><span>Shadow</span><input type="checkbox" checked={overlay.shadow} onChange={(e) => onChange({ shadow: e.target.checked })} /></label>
     </>
   )
 }
 
 function VisualControls({ overlay, onChange }: Pick<InspectorProps, 'onChange'> & { overlay: Overlay }): React.JSX.Element | null {
   if (overlay.type === 'audio') return null
-  return <NumberControl label="Opacity" value={overlay.opacity} min={0} max={1} step={0.05} onChange={(opacity) => onChange({ opacity } as Partial<Overlay>)} />
+  return <NumberControl label="Opacity" value={overlay.opacity} min={0} max={1} step={0.05} onChange={(opacity) => onChange({ opacity })} />
 }
 
 type AnimatedOverlay = Extract<Overlay, { type: 'text' | 'image' | 'video' }>
@@ -53,8 +53,8 @@ function AnimationTimingControls({ overlay, onChange }: Pick<InspectorProps, 'on
     const defaultFadeDuration = Math.min(0.22, overlay.duration / 2)
     const displayedFadeDuration = (value: number | undefined): number => Math.max(0, Math.min(limit, value ?? defaultFadeDuration))
     return <>
-      <NumberControl label="Visual fade in" value={displayedFadeDuration(overlay.animationFadeIn)} min={0} max={limit} step={0.05} onChange={(animationFadeIn) => onChange({ animationFadeIn } as Partial<Overlay>)} />
-      <NumberControl label="Visual fade out" value={displayedFadeDuration(overlay.animationFadeOut)} min={0} max={limit} step={0.05} onChange={(animationFadeOut) => onChange({ animationFadeOut } as Partial<Overlay>)} />
+      <NumberControl label="Visual fade in" value={displayedFadeDuration(overlay.animationFadeIn)} min={0} max={limit} step={0.05} onChange={(animationFadeIn) => onChange({ animationFadeIn })} />
+      <NumberControl label="Visual fade out" value={displayedFadeDuration(overlay.animationFadeOut)} min={0} max={limit} step={0.05} onChange={(animationFadeOut) => onChange({ animationFadeOut })} />
     </>
   }
   if (animation === 'pop' || animation === 'bounce' || animation === 'shake') {
@@ -62,7 +62,7 @@ function AnimationTimingControls({ overlay, onChange }: Pick<InspectorProps, 'on
       ? Math.min(0.55, overlay.duration)
       : Math.min(animation === 'pop' ? 0.28 : 0.38, overlay.duration / 2)
     const value = Math.max(0, Math.min(limit, overlay.animationDuration ?? defaultDuration))
-    return <NumberControl label="Animation duration" value={value} min={0} max={limit} step={0.05} onChange={(animationDuration) => onChange({ animationDuration } as Partial<Overlay>)} />
+    return <NumberControl label="Animation duration" value={value} min={0} max={limit} step={0.05} onChange={(animationDuration) => onChange({ animationDuration })} />
   }
   return null
 }
@@ -71,7 +71,7 @@ function MediaAnimationControls({ overlay, onChange }: Pick<InspectorProps, 'onC
   if (overlay.type !== 'image' && overlay.type !== 'video') return null
   const animation = overlay.animation ?? 'none'
   return <>
-    <label className="control-row"><span>Animation</span><select value={animation} onChange={(event) => onChange({ animation: event.target.value as MediaAnimationPreset } as Partial<Overlay>)}>
+    <label className="control-row"><span>Animation</span><select value={animation} onChange={(event) => onChange({ animation: event.target.value as MediaAnimationPreset })}>
       {mediaAnimationPresets.map((preset) => <option key={preset} value={preset}>{preset[0]?.toUpperCase()}{preset.slice(1)}</option>)}
     </select></label>
     <AnimationTimingControls overlay={overlay} onChange={onChange} />
@@ -86,16 +86,16 @@ function AudioSettingsControls({ overlay, onChange }: Pick<InspectorProps, 'onCh
   overlay: Extract<Overlay, { type: 'video' | 'audio' }>
 }): React.JSX.Element {
   return <>
-    <NumberControl label="Volume" value={overlay.volume} min={0} max={2} step={0.05} onChange={(volume) => onChange({ volume } as Partial<Overlay>)} />
+    <NumberControl label="Volume" value={overlay.volume} min={0} max={2} step={0.05} onChange={(volume) => onChange({ volume })} />
     {(['fadeIn', 'fadeOut'] as const).map((field) => <label className="control-row" key={field}>
       <span>{field === 'fadeIn' ? 'Fade in' : 'Fade out'}</span>
-      <select value={overlay[field] ?? 0} onChange={(event) => onChange({ [field]: Number(event.target.value) } as Partial<Overlay>)}>
+      <select value={overlay[field] ?? 0} onChange={(event) => onChange({ [field]: Number(event.target.value) })}>
         {audioFadeDurations.map((duration) => <option key={duration} value={duration}>{fadeLabel(duration)}</option>)}
       </select>
     </label>)}
     <label className="control-row" title="Automatically lowers gameplay audio while this sound plays.">
       <span>Lower game sound</span>
-      <input type="checkbox" checked={overlay.duckGameAudio ?? false} onChange={(event) => onChange({ duckGameAudio: event.target.checked } as Partial<Overlay>)} />
+      <input type="checkbox" checked={overlay.duckGameAudio ?? false} onChange={(event) => onChange({ duckGameAudio: event.target.checked })} />
     </label>
     {overlay.duckGameAudio && <label className="control-row"><span>Game sound</span>
       <select value={overlay.gameAudioLevel ?? 0.3} onChange={(event) => onChange({ gameAudioLevel: Number(event.target.value) } as Partial<Overlay>)}>
@@ -109,9 +109,9 @@ function VideoControls({ overlay, onChange }: Pick<InspectorProps, 'onChange'> &
   if (overlay.type !== 'video') return null
   return (
     <>
-      <label className="control-row"><span>Include audio</span><input type="checkbox" checked={overlay.audioEnabled} disabled={!overlay.hasAudio} onChange={(e) => onChange({ audioEnabled: e.target.checked } as Partial<Overlay>)} /></label>
+      <label className="control-row"><span>Include audio</span><input type="checkbox" checked={overlay.audioEnabled} disabled={!overlay.hasAudio} onChange={(e) => onChange({ audioEnabled: e.target.checked })} /></label>
       {overlay.hasAudio && overlay.audioEnabled && <AudioSettingsControls overlay={overlay} onChange={onChange} />}
-      <label className="control-row"><span>Loop clip</span><input type="checkbox" checked={overlay.loop} onChange={(e) => onChange({ loop: e.target.checked } as Partial<Overlay>)} /></label>
+      <label className="control-row"><span>Loop clip</span><input type="checkbox" checked={overlay.loop} onChange={(e) => onChange({ loop: e.target.checked })} /></label>
     </>
   )
 }

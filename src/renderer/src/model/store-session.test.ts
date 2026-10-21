@@ -18,7 +18,7 @@ describe('overlay session patches', () => {
   it('returns the existing session for clamped no-ops and missing IDs', () => {
     const session = sessionWithOverlays()
     const target = session.overlays[0]
-    if (!target || target.type !== 'text') throw new Error('test text overlay missing')
+    if (target?.type !== 'text') throw new Error('test text overlay missing')
 
     expect(patchedOverlaySession(session, target.id, { start: -1 })).toBe(session)
     expect(patchedOverlaySession(session, 'missing-overlay', { text: 'ignored' })).toBe(session)
@@ -28,7 +28,7 @@ describe('overlay session patches', () => {
     const session = sessionWithOverlays()
     const target = session.overlays[0]
     const unrelated = session.overlays[1]
-    if (!target || target.type !== 'text' || !unrelated || unrelated.type !== 'text') {
+    if (target?.type !== 'text' || unrelated?.type !== 'text') {
       throw new Error('test text overlays missing')
     }
 
@@ -38,7 +38,7 @@ describe('overlay session patches', () => {
     expect(patched.overlays).not.toBe(session.overlays)
     expect(patched.overlays[0]).not.toBe(target)
     const patchedTarget = patched.overlays[0]
-    if (!patchedTarget || patchedTarget.type !== 'text') throw new Error('patched text overlay missing')
+    if (patchedTarget?.type !== 'text') throw new Error('patched text overlay missing')
     expect(patchedTarget.text).toBe('Edited')
     expect(patched.overlays[1]).toBe(unrelated)
     expect(session.overlays[0]).toBe(target)

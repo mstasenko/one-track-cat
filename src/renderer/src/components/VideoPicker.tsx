@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { VideoDirectory, VideoDirectoryEntry } from '@shared/video-picker'
 import { finishVideoChoice, useVideoPickerStore } from '../model/video-picker'
 
@@ -46,7 +46,18 @@ export function VideoPicker(): React.JSX.Element {
   const [previewingPath, setPreviewingPath] = useState<string | null>(null)
   const [busyPath, setBusyPath] = useState<string | null>(null)
   const [fallbackBusy, setFallbackBusy] = useState(false)
-  openRef.current = open
+  useLayoutEffect(() => { openRef.current = open }, [open])
+  const [previousOpen, setPreviousOpen] = useState(false)
+  if (previousOpen !== open) {
+    setPreviousOpen(open)
+    setDirectory(null)
+    setEnteredPath('')
+    setLoading(open)
+    setError(null)
+    setPreviewingPath(null)
+    setBusyPath(null)
+    setFallbackBusy(false)
+  }
 
   const clearPreviewTimer = useCallback((): void => {
     if (previewTimerRef.current === null) return
@@ -54,13 +65,16 @@ export function VideoPicker(): React.JSX.Element {
     previewTimerRef.current = null
   }, [])
 
-  const stopPreview = useCallback((): void => {
+  const releasePreview = useCallback((): void => {
     clearPreviewTimer()
     previewGenerationRef.current += 1
     activePreviewGenerationRef.current = null
     stopVideo(videoRef.current)
-    setPreviewingPath(null)
   }, [clearPreviewTimer])
+  const stopPreview = useCallback((): void => {
+    releasePreview()
+    setPreviewingPath(null)
+  }, [releasePreview])
 
   const previewIsCurrent = useCallback((generation: number): boolean => (
     openRef.current && generation === previewGenerationRef.current
@@ -123,9 +137,23 @@ export function VideoPicker(): React.JSX.Element {
     focusedPathRef.current = null
   }, [])
 
-  const loadDirectory = useCallback(async (requested?: string): Promise<void> => {
-    if (!openRef.current) return
+  const readDirectory = useCallback((requested?: string): Promise<void> => {
     const request = ++directoryRequestRef.current
+    return window.otc.listVideoDirectory(requested).then((result) => {
+      if (request !== directoryRequestRef.current) return
+      setDirectory(result)
+      setEnteredPath(result.path)
+    }).catch((cause: unknown) => {
+      if (request === directoryRequestRef.current) {
+        setError(`Could not open this folder. ${errorMessage(cause).slice(0, 320)}`)
+      }
+    }).finally(() => {
+      if (request === directoryRequestRef.current) setLoading(false)
+    })
+  }, [])
+
+  const loadDirectory = useCallback((requested?: string): void => {
+    if (!openRef.current) return
     selectionRequestRef.current += 1
     hoveredPathRef.current = null
     focusedPathRef.current = null
@@ -133,19 +161,8 @@ export function VideoPicker(): React.JSX.Element {
     setDirectory(null)
     setLoading(true)
     setError(null)
-    try {
-      const result = await window.otc.listVideoDirectory(requested)
-      if (request !== directoryRequestRef.current) return
-      setDirectory(result)
-      setEnteredPath(result.path)
-    } catch (cause) {
-      if (request === directoryRequestRef.current) {
-        setError(`Could not open this folder. ${errorMessage(cause).slice(0, 320)}`)
-      }
-    } finally {
-      if (request === directoryRequestRef.current) setLoading(false)
-    }
-  }, [stopPreview])
+    void readDirectory(requested)
+  }, [readDirectory, stopPreview])
 
   const finish = useCallback((path: string | null): void => {
     invalidateRequests()
@@ -226,18 +243,13 @@ export function VideoPicker(): React.JSX.Element {
       }
       if (!dialog.open) dialog.showModal()
       cancelRef.current?.focus()
-      void loadDirectory()
-      return
+      void readDirectory()
+      return () => { directoryRequestRef.current += 1 }
     }
     invalidateRequests()
-    stopPreview()
-    setDirectory(null)
-    setEnteredPath('')
-    setLoading(false)
-    setBusyPath(null)
-    setFallbackBusy(false)
+    releasePreview()
     if (dialog.open) dialog.close()
-  }, [open, invalidateRequests, loadDirectory, stopPreview])
+  }, [open, invalidateRequests, readDirectory, releasePreview])
 
   useEffect(() => () => {
     invalidateRequests()
@@ -294,7 +306,7 @@ export function VideoPicker(): React.JSX.Element {
             type="button"
             aria-label="Go to parent folder"
             disabled={loading || fallbackBusy || !directory?.parent}
-            onClick={() => { if (directory?.parent) void loadDirectory(directory.parent) }}
+            onClick={() => { if (directory?.parent) loadDirectory(directory.parent) }}
           >
             ↑ Up
           </button>
@@ -313,14 +325,14 @@ export function VideoPicker(): React.JSX.Element {
         {error && <p className="video-picker-error" role="alert">{error}</p>}
         <div className="video-picker-browser" aria-busy={loading}>
           {loading && <p className="video-picker-status">Loading folder…</p>}
-          {!loading && directory && directory.entries.length === 0 && <p className="video-picker-status">No videos in this folder.</p>}
+          {!loading && directory?.entries.length === 0 && <p className="video-picker-status">No videos in this folder.</p>}
           {!loading && directory?.entries.map((entry) => entry.kind === 'directory'
             ? <button
                 type="button"
                 className="video-picker-entry video-picker-directory"
                 key={entry.path}
                 disabled={fallbackBusy}
-                onClick={() => void loadDirectory(entry.path)}
+                onClick={() => loadDirectory(entry.path)}
                 title={entry.path}
               >
                 📁 {entry.name}

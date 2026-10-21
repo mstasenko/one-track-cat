@@ -33,21 +33,20 @@ Windows, and macOS are not supported at this time.
 
 ### Hardware for optional AI features
 
-| AI feature | Required pack | GPU / fallback | Recommended system RAM |
-| --- | --- | --- | --- |
-| Face detection and blur | Face pack | Intel integrated or discrete GPU; CPU fallback. | 8 GB; 16 GB for 4K. |
-| 4K enhancement — Turbo / Base (FlashVSR+) | AI pack + first-use model download | Intel Arc discrete GPU with at least 12 GB VRAM; no CPU fallback for upscaling. | 32 GB. |
-| AI interpolation to 60 fps (input ≤50 fps) | AI pack | Intel GPU; CPU fallback. At 4K, GPU processing can need about 10 GB VRAM. | 16 GB; 32 GB for 4K. |
+| Feature | Graphics requirements | Recommended computer memory (RAM) |
+| --- | --- | --- |
+| Face blur (face pack) | Intel graphics recommended; also works on the CPU, more slowly. | 8 GB; 16 GB for 4K video. |
+| 4K enhancement (AI pack) | Intel Arc graphics card with **at least 12 GB of graphics memory**. Tested with B580 (12 GB) and A770 (16 GB). Cannot run on the CPU. | 32 GB. |
+| Smoother motion at 60 fps (AI pack) | Intel graphics recommended; also works on the CPU, more slowly. Fast processing at 4K can need about 10 GB of graphics memory. | 16 GB; 32 GB for 4K video. |
 
-The Arc B580 (12 GB) is the primary tested enhancement card. A770 (16 GB) also passes
-Turbo and Base tests, but is slower in current measurements. AMD and NVIDIA cards are not
-supported for AI enhancement. RIFE interpolation can use an Intel GPU or the CPU;
-CPU processing is slower. Above 50 fps, conversion to 60 fps repeats frames instead
-and needs no interpolation model or GPU inference.
+Graphics memory is separate from your computer's RAM on a dedicated graphics card.
+Built-in Intel graphics shares RAM instead. AMD and NVIDIA graphics are not supported for
+these AI features; face blur and smoother motion can use the CPU instead, but 4K enhancement cannot.
+Ordinary editing does not require an AI-capable graphics card.
 
-RAM figures are recommendations, not guaranteed minimums. Integrated GPUs share system RAM;
-discrete GPUs have separate VRAM. Other open programs also need memory. AI exports also need
-free temporary disk space; OneTrackCat checks it before starting.
+These memory figures are recommendations, not guaranteed minimums. Close other memory-heavy
+programs before AI exports, and leave free disk space for temporary files. OneTrackCat checks
+disk space before starting. The AI pack also downloads its models on first use.
 
 ## Install and open OneTrackCat
 
@@ -139,7 +138,7 @@ to CPU processing. Your project and media stay on your computer.
 In **Export**, choose an AI enhancement mode before clicking **Start**. It is off by default
 and requires the optional AI pack. Choose **Turbo** for faster processing or **Base** for
 more detail. Enhancement applies to the finished video, including its text and effects.
-Spatial enhancement supports landscape 3840×2160 videos and vertical 2160×3840 Shorts, and
+4K enhancement supports landscape 3840×2160 videos and vertical 2160×3840 Shorts, and
 requires a supported Intel discrete GPU. Extra frames can be added separately to reach 60 fps;
 sources at 50 fps or below use AI frame interpolation. Sources above 50 fps use occasional
 repeated frames instead, keeping conversion to 60 fps much faster.

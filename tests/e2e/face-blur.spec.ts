@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { click, dismissHardwareWarningIfNeeded, e2eEnvironment, main, syntheticVideo } from './support'
 
-test('missing face pack explains the local install and never offers a download action', async () => {
+test('Missing pack: local install instructions', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'otc-face-pack-'))
   const input = syntheticVideo(directory, true)
   const app = await electron.launch({

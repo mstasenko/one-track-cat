@@ -28,7 +28,7 @@ function toneEnergy(path: string, start: number, length: number, frequency: numb
   return 2 * Math.hypot(sine, cosine) / Math.max(1, samples.length)
 }
 
-test('one click inserts, marks, exports, and removes a half-speed Replay', async () => {
+test('Insert, export and undo half-speed Replay', async () => {
   test.setTimeout(90_000)
   const directory = mkdtempSync(join(tmpdir(), 'otc-v3-replay-'))
   const input = syntheticVideo(directory)
@@ -64,7 +64,7 @@ test('one click inserts, marks, exports, and removes a half-speed Replay', async
   }
 })
 
-test('text Pop previews from its start and exports through the local bitmap path', async () => {
+test('Preview and export text Pop', async () => {
   test.setTimeout(90_000)
   const directory = mkdtempSync(join(tmpdir(), 'otc-v3-text-'))
   const input = syntheticVideo(directory, true)
@@ -106,7 +106,7 @@ test('text Pop previews from its start and exports through the local bitmap path
   }
 })
 
-test('audio controls preserve 200 percent volume without native-volume errors', async () => {
+test('200% volume without errors', async () => {
   test.setTimeout(90_000)
   const directory = mkdtempSync(join(tmpdir(), 'otc-v4-audio-'))
   const input = syntheticVideo(directory, true)
@@ -142,7 +142,7 @@ test('audio controls preserve 200 percent volume without native-volume errors', 
   }
 })
 
-test('video audio settings follow Include audio and retain their values', async () => {
+test('Include audio retains volume settings', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'otc-v4-video-audio-'))
   const input = syntheticVideo(directory, true)
   const app = await electron.launch({ args: [main, input], env: e2eEnvironment({ otc_E2E_MEDIA: input }) })

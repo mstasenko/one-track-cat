@@ -120,7 +120,7 @@ async function close(app: ElectronApplication): Promise<void> {
   await app.evaluate(({ app: electronApp }) => electronApp.exit(0)).catch(() => undefined)
 }
 
-test('shows online templates below local assets, previews the image, deduplicates providers, and inserts it', async () => {
+test('Find, deduplicate, preview and insert images', async () => {
   test.setTimeout(60_000)
   const fixture = createFixture()
   const { app, page } = await prepare(fixture, 'all')
@@ -192,7 +192,7 @@ test('shows online templates below local assets, previews the image, deduplicate
   }
 })
 
-test('previews and inserts an online Imgflip video', async () => {
+test('Preview and insert Imgflip video', async () => {
   test.setTimeout(60_000)
   const fixture = createFixture()
   const videoFixture = { ...fixture, image: fixture.input }
@@ -221,7 +221,7 @@ test('previews and inserts an online Imgflip video', async () => {
   }
 })
 
-test('keeps successful provider results visible when Imgflip is offline', async () => {
+test('Retain results when Imgflip is offline', async () => {
   test.setTimeout(60_000)
   const fixture = createFixture()
   const { app, page } = await prepare(fixture, 'imgflip-offline')
@@ -239,7 +239,7 @@ test('keeps successful provider results visible when Imgflip is offline', async 
   }
 })
 
-test('bounds a long online result list without collapsing local assets', async () => {
+test('Long results preserve local assets', async () => {
   test.setTimeout(60_000)
   const fixture = createFixture()
   const { app, page } = await prepare(fixture, 'many')

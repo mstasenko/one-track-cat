@@ -5,6 +5,9 @@ import ts from 'typescript'
 const root = process.cwd()
 const maximumLines = 500
 const maximumCrap = 30
+const color = process.env.FORCE_COLOR !== '0' && !('NO_COLOR' in process.env)
+const passed = color ? '\x1b[32m✓\x1b[0m' : '✓'
+const failed = color ? '\x1b[31m✗\x1b[0m' : '✗'
 const sourceExtensions = new Set(['.ts', '.tsx', '.js', '.mjs', '.css', '.html'])
 const codeExtensions = new Set(['.ts', '.tsx', '.js', '.mjs'])
 
@@ -90,7 +93,6 @@ const lineCounts = await Promise.all(sourceFiles.map(async (path) => ({
   path,
   lines: (await readFile(path, 'utf8')).split(/\r?\n/).length
 })))
-const largest = lineCounts.toSorted((a, b) => b.lines - a.lines)[0]
 const oversized = lineCounts.filter(({ lines }) => lines > maximumLines)
 
 let coverageData = {}
@@ -106,24 +108,25 @@ for (const path of appFiles.filter((file) => codeExtensions.has(extname(file)) &
   const coverage = coverageData[resolve(path)]
   for (const metric of functionsIn(path, text, coverage)) metrics.push({ ...metric, path })
 }
-const worst = metrics.toSorted((a, b) => b.crap - a.crap)[0]
 const excessiveCrap = metrics.filter(({ crap }) => crap > maximumCrap + Number.EPSILON)
 
-process.stdout.write('\nMaintainability\n')
+process.stdout.write('Maintainability\n')
 if (oversized.length) {
-  process.stderr.write(`  ✖ Source files are at most ${maximumLines} lines\n`)
+  process.stderr.write(`  ${failed} Source files are at most ${maximumLines} lines\n`)
   for (const item of oversized) process.stderr.write(`    ${relative(root, item.path)}: ${item.lines} lines\n`)
 } else {
-  process.stdout.write(`  ✔ Source files are at most ${maximumLines} lines (largest: ${relative(root, largest.path)}, ${largest.lines})\n`)
+  process.stdout.write(`  ${passed} Source files are at most ${maximumLines} lines\n`)
 }
 
 if (excessiveCrap.length) {
-  process.stderr.write(`  ✖ Every function has CRAP ≤ ${maximumCrap}\n`)
+  process.stderr.write(`  ${failed} Every function has CRAP ≤ ${maximumCrap}\n`)
   for (const item of excessiveCrap.toSorted((a, b) => b.crap - a.crap)) {
     process.stderr.write(`    ${relative(root, item.path)}:${item.line} ${item.name}: CRAP ${item.crap.toFixed(2)}, complexity ${item.complexity}, coverage ${item.coverage.toFixed(0)}%\n`)
   }
 } else {
-  process.stdout.write(`  ✔ Every function has CRAP ≤ ${maximumCrap} (worst: ${worst.crap.toFixed(2)} in ${relative(root, worst.path)}:${worst.line})\n`)
+  process.stdout.write(`  ${passed} Every function has CRAP ≤ ${maximumCrap}\n`)
 }
 
 if (oversized.length || excessiveCrap.length) process.exitCode = 1
+const failures = Number(oversized.length > 0) + Number(excessiveCrap.length > 0)
+process.stdout.write(`Results: ${2 - failures} passed, ${failures} failed, 0 skipped\n`)

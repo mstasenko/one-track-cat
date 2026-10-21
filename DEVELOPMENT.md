@@ -20,6 +20,24 @@ npm run dev
 The development launcher prepares the local media pack and installs the development desktop
 entry when needed. Development does not require Docker or `sudo`.
 
+The scoped `@electron/get` override keeps the packager's proxy support on
+`global-agent` 4, without the vulnerable `roarr`/`sprintf-js` dependency chain.
+Keep it until the packager updates its downloader; verify proxy setup and
+`npm audit` when changing it. Exact pins and the seven-day release delay remain enabled.
+Package lockfiles are disabled and ignored. Keep direct dependency versions exact and run
+`npm audit` after installation: indirect dependencies can change between installs.
+
+Test commands group short result names by suite, with colored status marks and no live redraws.
+Vitest, Playwright, Python and maintainability checks use the same indented status rows
+and `Results: N passed, N failed, N skipped` footer, without dashed separators or timing banners.
+`npm test` also prints a grand total of completed suites (including maintainability checks).
+The run count excludes skipped tests; an early command failure is marked as an incomplete run.
+Suite headings and test labels use sentence case; keep acronyms and code identifiers intact.
+Use a short behavior phrase for each test and put repeated context in a `describe` group,
+not in every test name. File headings replace filename separators with spaces.
+Use `FORCE_COLOR=0` to disable colors. Failure details and HTML reports remain available.
+Unexpected console errors and warnings fail unit tests; passing tests do not print debug logs.
+
 ## Useful commands
 
 ```bash

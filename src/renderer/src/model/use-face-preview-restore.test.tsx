@@ -1,4 +1,4 @@
-import { act } from 'react'
+import { act, useLayoutEffect } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { EditSession, FacePreviewResult, JobProgress } from '@shared/types'
@@ -38,12 +38,13 @@ let container: HTMLDivElement | undefined
 let currentState: FacePreviewState | undefined
 
 function PreviewHarness({ session: currentSession = session, job, onError = vi.fn(), previewRange }: { session?: EditSession; job: JobProgress | null; onError?: (message: string) => void; previewRange?: [number, number] }): React.JSX.Element {
-  currentState = useFacePreview(currentSession, job, onError, previewRange)
+  const state = useFacePreview(currentSession, job, onError, previewRange)
+  useLayoutEffect(() => { currentState = state })
   return <output
-    data-rendering={String(currentState.rendering)}
-    data-url={currentState.renderedPreview?.url ?? ''}
-    data-start={currentState.renderedPreview ? String(currentState.renderedPreview.start) : ''}
-    data-end={currentState.renderedPreview ? String(currentState.renderedPreview.end) : ''}
+    data-rendering={String(state.rendering)}
+    data-url={state.renderedPreview?.url ?? ''}
+    data-start={state.renderedPreview ? String(state.renderedPreview.start) : ''}
+    data-end={state.renderedPreview ? String(state.renderedPreview.end) : ''}
   />
 }
 
@@ -64,6 +65,15 @@ function deferredRestore(): { promise: Promise<FacePreviewResult[]>; resolve: (v
   let resolve!: (value: FacePreviewResult[]) => void
   const promise = new Promise<FacePreviewResult[]>((finish) => { resolve = finish })
   return { promise, resolve }
+}
+
+async function flushRestore(): Promise<void> {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 220))
+    await Promise.resolve()
+    await Promise.resolve()
+    await Promise.resolve()
+  })
 }
 
 beforeEach(() => {
@@ -95,12 +105,13 @@ describe('useFacePreview', () => {
     const restoreFacePreview = vi.mocked(window.otc.restoreFacePreview)
     restoreFacePreview.mockResolvedValue([restored])
     render(null, vi.fn(), persistedFaceSession)
-    await vi.waitFor(() => expect(restoreFacePreview).toHaveBeenCalledOnce())
+    await flushRestore()
+    expect(restoreFacePreview).toHaveBeenCalledOnce()
     expect(restoreFacePreview).toHaveBeenCalledWith(expect.objectContaining({
       outputPath: '', faceBlurs: persistedFaceSession.faceBlurs
     }))
     expect(window.otc.previewFaces).not.toHaveBeenCalled()
-    await vi.waitFor(() => expect(outputElement().getAttribute('data-url')).toBe(restored.url))
+    expect(outputElement().getAttribute('data-url')).toBe(restored.url)
 
     act(() => { root?.unmount() })
     container?.remove()
@@ -108,8 +119,9 @@ describe('useFacePreview', () => {
     container = undefined
     restoreFacePreview.mockClear()
     render(null, vi.fn(), persistedFaceSession)
-    await vi.waitFor(() => expect(restoreFacePreview).toHaveBeenCalledOnce())
-    await vi.waitFor(() => expect(outputElement().getAttribute('data-url')).toBe(restored.url))
+    await flushRestore()
+    expect(restoreFacePreview).toHaveBeenCalledOnce()
+    expect(outputElement().getAttribute('data-url')).toBe(restored.url)
     expect(outputElement().getAttribute('data-start')).toBe('0')
     expect(outputElement().getAttribute('data-end')).toBe('10')
 
@@ -127,7 +139,8 @@ describe('useFacePreview', () => {
     const restoreFacePreview = vi.mocked(window.otc.restoreFacePreview)
     restoreFacePreview.mockResolvedValue([first, second])
     render(null, vi.fn(), persistedFaceSession)
-    await vi.waitFor(() => expect(currentState?.renderedPreviews).toEqual([first, second]))
+    await flushRestore()
+    expect(currentState?.renderedPreviews).toEqual([first, second])
     expect(window.otc.previewFaces).not.toHaveBeenCalled()
   })
 
@@ -136,13 +149,15 @@ describe('useFacePreview', () => {
     const showError = vi.fn()
     restoreFacePreview.mockResolvedValueOnce([]).mockRejectedValueOnce(new Error('invalid cache'))
     render(null, showError, persistedFaceSession)
-    await vi.waitFor(() => expect(restoreFacePreview).toHaveBeenCalledOnce())
+    await flushRestore()
+    expect(restoreFacePreview).toHaveBeenCalledOnce()
     expect(window.otc.previewFaces).not.toHaveBeenCalled()
     expect(showError).not.toHaveBeenCalled()
 
     const changed = { ...persistedFaceSession, canvas: { ...persistedFaceSession.canvas, width: 640 } }
     act(() => { root?.render(<PreviewHarness session={changed} job={null} onError={showError} />) })
-    await vi.waitFor(() => expect(restoreFacePreview).toHaveBeenCalledTimes(2))
+    await flushRestore()
+    expect(restoreFacePreview).toHaveBeenCalledTimes(2)
     expect(window.otc.previewFaces).not.toHaveBeenCalled()
     expect(showError).not.toHaveBeenCalled()
     expect(container?.querySelector('output')?.getAttribute('data-url')).toBe('')
@@ -153,7 +168,8 @@ describe('useFacePreview', () => {
     const deferred = deferredRestore()
     restoreFacePreview.mockReturnValueOnce(deferred.promise)
     render(null, vi.fn(), persistedFaceSession)
-    await vi.waitFor(() => expect(restoreFacePreview).toHaveBeenCalledOnce())
+    await flushRestore()
+    expect(restoreFacePreview).toHaveBeenCalledOnce()
 
     const edited = { ...persistedFaceSession, canvas: { ...persistedFaceSession.canvas, width: 640 } }
     act(() => { root?.render(<PreviewHarness session={edited} job={null} />) })
@@ -167,7 +183,8 @@ describe('useFacePreview', () => {
     const deferred = deferredRestore()
     restoreFacePreview.mockReturnValueOnce(deferred.promise)
     render(null, vi.fn(), persistedFaceSession)
-    await vi.waitFor(() => expect(restoreFacePreview).toHaveBeenCalledOnce())
+    await flushRestore()
+    expect(restoreFacePreview).toHaveBeenCalledOnce()
 
     let resolvePreview!: (url: string) => void
     window.otc.previewFaces = vi.fn(() => new Promise<string>((resolve) => { resolvePreview = resolve }))
@@ -188,7 +205,8 @@ describe('useFacePreview', () => {
     const deferred = deferredRestore()
     restoreFacePreview.mockReturnValueOnce(deferred.promise)
     render(null, vi.fn(), persistedFaceSession)
-    await vi.waitFor(() => expect(restoreFacePreview).toHaveBeenCalledOnce())
+    await flushRestore()
+    expect(restoreFacePreview).toHaveBeenCalledOnce()
     act(() => {
       currentState?.invalidate()
       deferred.resolve([{ url: 'stale-cancel', start: 0, end: 10 }])
@@ -202,7 +220,8 @@ describe('useFacePreview', () => {
     const deferred = deferredRestore()
     restoreFacePreview.mockReturnValueOnce(deferred.promise)
     render(null, vi.fn(), persistedFaceSession)
-    await vi.waitFor(() => expect(restoreFacePreview).toHaveBeenCalledOnce())
+    await flushRestore()
+    expect(restoreFacePreview).toHaveBeenCalledOnce()
     act(() => { root?.unmount() })
     act(() => { deferred.resolve([{ url: 'stale-unmount', start: 0, end: 10 }]) })
     await act(async () => { await Promise.resolve() })

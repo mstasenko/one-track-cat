@@ -1,14 +1,13 @@
 import { useEffect, useState } from 'react'
 
 export function useMediaUrl(path?: string): string {
-  const [url, setUrl] = useState('')
+  const [media, setMedia] = useState({ path, url: '' })
   useEffect(() => {
     let active = true
-    setUrl('')
     if (path) void window.otc.getPathUrl(path)
-      .then((value) => { if (active) setUrl(value) })
+      .then((url) => { if (active) setMedia({ path, url }) })
       .catch(() => undefined)
     return () => { active = false }
   }, [path])
-  return url
+  return media.path === path ? media.url : ''
 }

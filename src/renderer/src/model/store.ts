@@ -335,7 +335,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
     })
   },
   setTextAnimation(id, preset) {
-    set((state) => mutation(state, (session) => patchedOverlaySession(session, id, { animation: preset } as Partial<Overlay>)))
+    set((state) => mutation(state, (session) => patchedOverlaySession(session, id, { animation: preset })))
   },
   addText() {
     set((state) => mutation(state, (session) => {

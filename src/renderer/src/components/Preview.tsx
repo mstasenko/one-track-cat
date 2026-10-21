@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { EditSession, FocusZoomAmount, Overlay } from '@shared/types'
 import {
   isFreezeSegment,
@@ -19,7 +19,7 @@ import { gameAudioGainAtOutputTime } from '@shared/audio-envelope'
 import { usePreviewAudioMixer, type PreviewAudioMixer } from './usePreviewAudioMixer'
 import { RenderedPreview } from './RenderedPreview'
 import { IncomingTransitionVideo, OutgoingTransitionVideo } from './TransitionPreview'
-import { incomingTransitionMedia, secondaryPreviewMedia } from './preview-media'
+import { incomingTransitionMedia, secondaryPreviewMedia, mediaSource } from './preview-media'
 import type { RenderedFacePreview } from '../model/use-face-preview'
 import { videoRangeStyleAtTime } from '../model/video-range-transition'
 import { isShortCanvas } from '@shared/short-frame'
@@ -53,7 +53,6 @@ export interface PreviewProps {
   renderedPreviews?: RenderedFacePreview[]
 }
 
-
 function focusCameraStyle(session: EditSession, outputTime: number): React.CSSProperties | undefined {
   const transform = focusCameraTransformAtTime(session.focusZooms, outputTime, shortFrameGuideRect(session, outputTime))
   return transform ? { transform, transformOrigin: 'top left' } : undefined
@@ -72,7 +71,6 @@ function handleStagePointer(event: React.PointerEvent<HTMLDivElement>, focus: Fo
   }
   if (event.target === event.currentTarget) props.onSelect(null)
 }
-
 
 function updatePlayback(
   video: HTMLVideoElement,
@@ -119,33 +117,35 @@ function SourcePreview(props: SourcePreviewProps): React.JSX.Element {
   const videoRef = useRef<HTMLVideoElement>(null)
   const secondaryVideoRef = useRef<HTMLVideoElement>(null)
   const shortFrameRef = useRef<HTMLDivElement>(null)
-  const [mediaError, setMediaError] = useState<string | null>(null)
+  const [mediaFailure, setMediaFailure] = useState<{ path: string; message: string } | null>(null)
   const [readyPlaybackKey, setReadyPlaybackKey] = useState('')
   const [audioTail, setAudioTail] = useState<AudioTail | null>(null)
   const activeSegment = useRef(0)
   const seekingFromTimeline = useRef(false)
   const currentPlaybackRef = useRef({ key: '', readyKey: '', sourceKey: '', generation: 0 })
-  const mediaTimeOffsets = useRef(new Map<string, number>())
+  const [mediaTimeOffsets, setMediaTimeOffsets] = useState(() => new Map<string, number>())
   const playingRef = useRef(props.playing)
   const onPlayheadRef = useRef(props.onPlayhead)
   const onPlayingChangeRef = useRef(props.onPlayingChange)
-  playingRef.current = props.playing
-  onPlayheadRef.current = props.onPlayhead
-  onPlayingChangeRef.current = props.onPlayingChange
+  useLayoutEffect(() => {
+    playingRef.current = props.playing
+    onPlayheadRef.current = props.onPlayhead
+    onPlayingChangeRef.current = props.onPlayingChange
+  }, [props.playing, props.onPlayhead, props.onPlayingChange])
 
   const { position, playbackPath, freeze: positionIsFreeze } = previewContext(props.session)
   const sourceKey = position ? `${position.segment.id}:${playbackPath}` : ''
-  if (currentPlaybackRef.current.sourceKey !== sourceKey) {
+  const [playback, setPlayback] = useState({ sourceKey, generation: 0 })
+  if (playback.sourceKey !== sourceKey) {
     // Returning A→B→A is a new load, so old readiness and callbacks must not match.
-    currentPlaybackRef.current.sourceKey = sourceKey
-    currentPlaybackRef.current.generation += 1
-    currentPlaybackRef.current.key = sourceKey
-      ? `${sourceKey}:${currentPlaybackRef.current.generation}`
-      : ''
+    setPlayback({ sourceKey, generation: playback.generation + 1 })
   }
-  const playbackKey = currentPlaybackRef.current.key
-  const mediaTimeOffset = position ? mediaTimeOffsets.current.get(position.segment.id) ?? 0 : 0
-  currentPlaybackRef.current.readyKey = readyPlaybackKey
+  const playbackKey = sourceKey ? `${sourceKey}:${playback.generation}` : ''
+  const mediaTimeOffset = position ? mediaTimeOffsets.get(position.segment.id) ?? 0 : 0
+  const mediaError = mediaFailure?.path === playbackPath ? mediaFailure.message : null
+  useLayoutEffect(() => {
+    currentPlaybackRef.current = { key: playbackKey, readyKey: readyPlaybackKey, sourceKey, generation: playback.generation }
+  }, [playbackKey, readyPlaybackKey, sourceKey, playback.generation])
   const requestedSourceTime = position
     ? previewSeekTime(position, props.playing, previewSourceFps(props.session, position)) + mediaTimeOffset
     : 0
@@ -173,21 +173,26 @@ function SourcePreview(props: SourcePreviewProps): React.JSX.Element {
   const shortFrameStyle = shortFrameGuideStyle(props.session, visualTime)
   const previewFit = short ? 'contain' : props.session.canvas.fit
   const fallbackAudio = waitingForSwitchedFrame && !transitionPreview
+  // Keep preloaded overlap audio audible while the incoming primary decoder loads.
+  const audibleFallback = fallbackAudio || Boolean(incomingTransitionFallback)
   const previewGain = gameAudioGainAtOutputTime(props.session.overlays, visualTime)
   const currentSegment = position?.segment
   const { approachingAudioCut, audioCutTime } = previewAudioCut(props.session, position, visualTime, mediaTimeOffset)
   const updateFromIncomingTransition = (mediaTime: number, path: string): void => {
+    // After handoff this retained decoder is no longer the next clip's preloader.
+    if (transitionPreview && !incomingTransitionFallback) return
     const segmentIndex = incomingTransitionFallback
       ? incomingTransitionFallback.active.previousSegmentIndex + 1
       : (position?.segmentIndex ?? -1) + 1
     const segment = props.session.segments[segmentIndex]
     const source = segment ? sourceForSegment(props.session, segment) : null
-    if (!segment || !source || source.playbackPath !== path) return
-    let offset = mediaTimeOffsets.current.get(segment.id)
+    if (!segment || source?.playbackPath !== path) return
+    let offset = mediaTimeOffsets.get(segment.id)
     if (offset === undefined) {
       const requestedTime = incomingTransitionFallback?.currentSourceTime ?? segmentSourceStart(segment)
       offset = Math.max(0, mediaTime - requestedTime)
-      mediaTimeOffsets.current.set(segment.id, offset)
+      const capturedOffset = offset
+      setMediaTimeOffsets((previous) => new Map(previous).set(segment.id, capturedOffset))
     }
     if (!incomingTransitionFallback) return
     onPlayheadRef.current(outputTimeForSource(
@@ -263,16 +268,16 @@ function SourcePreview(props: SourcePreviewProps): React.JSX.Element {
     const video = videoRef.current
     if (!video) return
     // Silence the final 10 ms at a clip boundary so arbitrary source samples cannot click.
-    if (!fallbackAudio && props.playing && approachingAudioCut && currentSegment && !isFreezeSegment(currentSegment)) {
+    if (!audibleFallback && props.playing && approachingAudioCut && currentSegment && !isFreezeSegment(currentSegment)) {
       // Presented frames can lag the audio clock; schedule against the media clock.
       const delay = (currentSegment.sourceEnd + mediaTimeOffset - video.currentTime) / segmentPlaybackRate(currentSegment) - 0.01
       props.mixer.setGain(video, 0, delay, 0.01)
     } else {
       // A new decoder must start muted; its playing event starts the fade-in.
       // Starting the ramp during loading exposes its first sample at high gain.
-      props.mixer.setGain(video, fallbackAudio || video.readyState < 2 ? 0 : previewGain)
+      props.mixer.setGain(video, audibleFallback || video.readyState < 2 ? 0 : previewGain)
     }
-  }, [approachingAudioCut, currentSegment, fallbackAudio, mediaTimeOffset, playbackKey, previewGain, props.mixer, props.playing])
+  }, [approachingAudioCut, currentSegment, audibleFallback, mediaTimeOffset, playbackKey, previewGain, props.mixer, props.playing])
 
   useEffect(() => {
     if (!audioTail) return
@@ -282,8 +287,6 @@ function SourcePreview(props: SourcePreviewProps): React.JSX.Element {
   }, [audioTail])
 
   useEffect(() => { if (props.playing) props.mixer.resume() }, [props.mixer, props.playing])
-
-  useEffect(() => setMediaError(null), [playbackPath])
 
   useEffect(() => {
     const video = videoRef.current
@@ -349,19 +352,23 @@ function SourcePreview(props: SourcePreviewProps): React.JSX.Element {
         audibleFallback={fallbackAudio}
         fallbackGain={previewGain}
         audioCutTime={audioCutTime}
+        audioClockRef={videoRef}
         mixer={props.mixer}
         mediaRef={secondaryVideoRef}
         fit={previewFit}
         className="preview-source-video preview-transition-previous"
       />
-      <div className="preview-transition-incoming-layer">
+      <div className="preview-transition-incoming-layer" style={{ opacity: Number(Boolean(incomingTransitionFallback)) }}>
         <IncomingTransitionVideo
-          preview={incomingTransitionFallback}
+          preview={transitionPreview}
           playing={props.playing}
           preloadPath={incomingTransition.path}
           preloadTime={incomingTransition.time}
           preloadRate={incomingTransition.rate}
           onPresentedTime={updateFromIncomingTransition}
+          mixer={props.mixer}
+          audibleFallback={Boolean(incomingTransitionFallback)}
+          fallbackGain={previewGain}
           fit={previewFit}
           className="preview-transition-incoming"
         />
@@ -370,7 +377,7 @@ function SourcePreview(props: SourcePreviewProps): React.JSX.Element {
         ref={videoRef}
         className="preview-source-video"
         crossOrigin="anonymous"
-        src={playbackPath}
+        src={mediaSource(playbackPath)}
         style={{
           objectFit: previewFit,
           ...rangeStyle,
@@ -380,13 +387,13 @@ function SourcePreview(props: SourcePreviewProps): React.JSX.Element {
         data-transition={mainTransition?.active.effect}
         preload="auto"
         playsInline
-        onLoadedData={(event) => { setMediaError(null); startIncomingWhenReady(event.currentTarget) }}
+        onLoadedData={(event) => { setMediaFailure(null); startIncomingWhenReady(event.currentTarget) }}
         onCanPlay={(event) => startIncomingWhenReady(event.currentTarget)}
         onCanPlayThrough={(event) => startIncomingWhenReady(event.currentTarget)}
-        onError={() => setMediaError('This video cannot be shown. Try reopening it.')}
+        onError={() => setMediaFailure({ path: playbackPath, message: 'This video cannot be shown. Try reopening it.' })}
         onSeeked={(event) => { seekingFromTimeline.current = false; startIncomingWhenReady(event.currentTarget) }}
         onPlaying={(event) => {
-          if (playingRef.current && !fallbackAudio && !approachingAudioCut) props.mixer.setGain(event.currentTarget, previewGain)
+          if (playingRef.current && !audibleFallback && !approachingAudioCut) props.mixer.setGain(event.currentTarget, previewGain)
         }}
         onEnded={(event) => {
           if (playingRef.current && activeSegment.current === position?.segmentIndex) {

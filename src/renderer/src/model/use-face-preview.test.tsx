@@ -1,4 +1,4 @@
-import { act } from 'react'
+import { act, useLayoutEffect } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { EditSession, FacePreviewRequest, JobProgress } from '@shared/types'
@@ -31,12 +31,13 @@ let container: HTMLDivElement | undefined
 let currentState: FacePreviewState | undefined
 
 function PreviewHarness({ session: currentSession = session, job, onError = vi.fn(), previewRange }: { session?: EditSession; job: JobProgress | null; onError?: (message: string) => void; previewRange?: [number, number] }): React.JSX.Element {
-  currentState = useFacePreview(currentSession, job, onError, previewRange)
+  const state = useFacePreview(currentSession, job, onError, previewRange)
+  useLayoutEffect(() => { currentState = state })
   return <output
-    data-rendering={String(currentState.rendering)}
-    data-url={currentState.renderedPreview?.url ?? ''}
-    data-start={currentState.renderedPreview ? String(currentState.renderedPreview.start) : ''}
-    data-end={currentState.renderedPreview ? String(currentState.renderedPreview.end) : ''}
+    data-rendering={String(state.rendering)}
+    data-url={state.renderedPreview?.url ?? ''}
+    data-start={state.renderedPreview ? String(state.renderedPreview.start) : ''}
+    data-end={state.renderedPreview ? String(state.renderedPreview.end) : ''}
   />
 }
 

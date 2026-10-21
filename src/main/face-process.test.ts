@@ -2,6 +2,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Readable } from 'node:stream'
+import { finished } from 'node:stream/promises'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 interface MockWindow { webContents: { send: (...args: unknown[]) => void } }
 const electronMock = vi.hoisted(() => ({ windows: [] as MockWindow[] }))
@@ -159,7 +160,7 @@ describe('bounded face process pipeline', () => {
 
   it('retains native worker diagnostics while the cache callback consumes stderr', async () => {
     const capture = async (stream: Readable): Promise<void> => {
-      for await (const chunk of stream) { void chunk /* Cache consumer intentionally drains the worker stream. */ }
+      await finished(stream.resume())
     }
     const error = await runFacePipeline([
       node('process.exit(0)'),

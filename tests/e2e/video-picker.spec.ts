@@ -55,7 +55,7 @@ async function close(app: ElectronApplication): Promise<void> {
   await app.evaluate(({ app: electronApp }) => electronApp.exit(0)).catch(() => undefined)
 }
 
-test('lists videos, previews one muted file, and keeps an open project safe', async () => {
+test('Muted hover preview; preserve open project', async () => {
   test.setTimeout(60_000)
   const fixture = createFixture()
   const app = await launch(fixture.first, fixture.second)
@@ -119,7 +119,7 @@ test('lists videos, previews one muted file, and keeps an open project safe', as
   }
 })
 
-test('opens the selected file from the chooser', async () => {
+test('Open chosen video', async () => {
   test.setTimeout(60_000)
   const fixture = createFixture()
   const app = await launch(fixture.first, fixture.second)
@@ -138,7 +138,7 @@ test('opens the selected file from the chooser', async () => {
   }
 })
 
-test('opens a Short through the native chooser fallback with full-source preview and portrait framing guide', async () => {
+test('Open Short: native picker and framing guide', async () => {
   test.setTimeout(60_000)
   const fixture = createFixture()
   const app = await launch(fixture.first, fixture.first)

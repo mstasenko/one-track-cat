@@ -61,6 +61,13 @@ function installBridge(getPathUrl: (path: string) => Promise<string>): void {
   })
 }
 
+async function flushMediaUrl(): Promise<void> {
+  await act(async () => {
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+}
+
 let root: Root | undefined
 let container: HTMLDivElement | undefined
 
@@ -181,13 +188,14 @@ describe('preview overlay media synchronization', () => {
     expect(audio.currentTime).toBe(8)
   })
 
-  it('fades image content while keeping user opacity on the parent selection layer', () => {
+  it('fades image content while keeping user opacity on the parent selection layer', async () => {
     installBridge((path) => Promise.resolve(`media:${path}`))
     const overlay = imageOverlay()
     const session = sessionWithOverlay(overlay)
     session.selectedOverlayId = overlay.id
     const audioMixer = mixer()
     const app = mount(session, false, 0, audioMixer)
+    await flushMediaUrl()
     const image = (): HTMLImageElement => {
       const element = app.querySelector('img')
       if (!(element instanceof HTMLImageElement)) throw new Error('preview image missing')
@@ -204,12 +212,13 @@ describe('preview overlay media synchronization', () => {
     expect(Number(image().style.opacity)).toBeLessThan(0.001)
   })
 
-  it('fades video content with the same envelope as image overlays', () => {
+  it('fades video content with the same envelope as image overlays', async () => {
     installBridge((path) => Promise.resolve(`media:${path}`))
     const overlay: VideoOverlay = { ...videoOverlay(), duration: 1, sourceDuration: 1, opacity: 0.7, animation: 'fade' }
     const session = sessionWithOverlay(overlay)
     const audioMixer = mixer()
     const app = mount(session, false, 0, audioMixer)
+    await flushMediaUrl()
     const video = (): HTMLVideoElement => {
       const element = app.querySelector('video')
       if (!(element instanceof HTMLVideoElement)) throw new Error('preview video missing')
@@ -224,12 +233,13 @@ describe('preview overlay media synchronization', () => {
     expect(Number(video().style.opacity)).toBeLessThan(0.001)
   })
 
-  it('applies text animation transforms and explicit visual fade timing to media content', () => {
+  it('applies text animation transforms and explicit visual fade timing to media content', async () => {
     installBridge((path) => Promise.resolve(`media:${path}`))
     const image = imageOverlay()
     const imageSession = sessionWithOverlay({ ...image, animation: 'pop' })
     const imageMixer = mixer()
     const imageApp = mount(imageSession, false, 0, imageMixer)
+    await flushMediaUrl()
     const imageElement = imageApp.querySelector('img')
     if (!(imageElement instanceof HTMLImageElement)) throw new Error('preview image missing')
     expect(imageElement.style.opacity).toBe('0')
@@ -247,6 +257,7 @@ describe('preview overlay media synchronization', () => {
 
     const video = { ...videoOverlay(), duration: 1, sourceDuration: 1, animation: 'bounce' as const }
     const videoApp = mount(sessionWithOverlay(video), false, 0, mixer())
+    await flushMediaUrl()
     const videoElement = videoApp.querySelector('video')
     if (!(videoElement instanceof HTMLVideoElement)) throw new Error('preview video missing')
     expect(videoElement.style.opacity).toBe('0')

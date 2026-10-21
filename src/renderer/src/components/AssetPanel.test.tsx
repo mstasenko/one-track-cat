@@ -339,20 +339,28 @@ describe('asset panel', () => {
     const onSelectFaceBlur = vi.fn()
     const app = mount({ onSelectFaceBlur })
     act(() => { button(app, 'Blur faces').click() })
-    await vi.waitFor(() => expect(button(app, 'Apply face blur').disabled).toBe(false))
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(button(app, 'Apply face blur').disabled).toBe(false)
     expect(app.textContent).toContain('Apply to entire video')
     act(() => { button(app, /Back/).click() })
     expect(app.textContent).toContain('Effects')
     expect(onSelectFaceBlur).not.toHaveBeenCalled()
   })
 
-  it('shows selected face settings and lets the user leave that panel', () => {
+  it('shows selected face settings and lets the user leave that panel', async () => {
     const selected: FaceBlurEffect = {
       id: 'face', start: 2, duration: 3, sensitivity: 0.7, detail: 'standard',
       holdSeconds: 0.3, strength: 0.7, style: 'pixelate'
     }
     const onSelectFaceBlur = vi.fn()
     const app = mount({ selectedFaceBlur: selected, faceBlurs: [selected], onSelectFaceBlur })
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
     expect(app.textContent).toContain('Apply to selected range.')
     act(() => { button(app, /Back/).click() })
     expect(onSelectFaceBlur).toHaveBeenCalledWith(null)

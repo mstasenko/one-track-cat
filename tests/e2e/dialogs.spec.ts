@@ -43,7 +43,7 @@ test.afterEach(async () => {
   for (const directory of temporaryDirectories.splice(0)) rmSync(directory, { recursive: true, force: true })
 })
 
-test('traps Reset project confirmation, preserves Cancel/Escape, and resets only on explicit confirmation', async () => {
+test('Reset: confirm, cancel and Escape', async () => {
   const directory = temporaryDirectory('otc-reset-dialog-')
   const input = syntheticVideo(directory, true)
   const app = await launch(input)
@@ -94,7 +94,7 @@ test('traps Reset project confirmation, preserves Cancel/Escape, and resets only
   await expect(window.getByRole('textbox', { name: 'Text' })).toHaveCount(0)
 })
 
-test('restores normal-close state and Reset project forgets it', async () => {
+test('Restore saved state; Reset forgets it', async () => {
   const directory = temporaryDirectory('otc-restore-')
   const input = syntheticVideo(directory, true)
   const first = await launch(input)
@@ -132,7 +132,7 @@ test('restores normal-close state and Reset project forgets it', async () => {
   await expect(emptyWindow.getByRole('heading', { name: 'Drop a video' })).toBeVisible()
 })
 
-test('keeps editing and jobs usable after a failed close save is canceled', async () => {
+test('Cancel a failed close save', async () => {
   const directory = temporaryDirectory('otc-close-save-cancel-')
   const input = syntheticVideo(directory, true)
   const blockedUserData = join(directory, 'blocked-user-data')

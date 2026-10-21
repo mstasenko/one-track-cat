@@ -4,7 +4,7 @@ export default defineConfig({
   testDir: './tests/e2e',
   timeout: 30_000,
   workers: 1,
-  reporter: [['list'], ['html', { open: 'never' }]],
+  reporter: [['./tests/reporters/playwright.ts'], ['html', { open: 'never' }]],
   use: {
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure'

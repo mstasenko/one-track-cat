@@ -344,7 +344,7 @@ async function publishPart(partPath: string, destination: string): Promise<void>
     await link(partPath, destination)
   } catch (error) {
     if (error instanceof Error && 'code' in error && error.code === 'EEXIST') {
-      throw new Error('The model destination is already occupied')
+      throw new Error('The model destination is already occupied', { cause: error })
     }
     throw error
   }

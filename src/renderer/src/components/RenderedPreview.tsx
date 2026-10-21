@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { RenderedFacePreview } from '../model/use-face-preview'
 
 interface RenderedPreviewProps {
@@ -57,15 +57,18 @@ export function RenderedPreview({
   const playingRef = useRef(playing)
   const onPlayheadRef = useRef(onPlayhead)
   const onPlayingChangeRef = useRef(onPlayingChange)
-  const [mediaError, setMediaError] = useState<string | null>(null)
-  playingRef.current = playing
-  onPlayheadRef.current = onPlayhead
-  onPlayingChangeRef.current = onPlayingChange
+  const [mediaFailure, setMediaFailure] = useState<{ key: string; message: string } | null>(null)
+  const previewKey = `${preview.url}:${preview.start}:${preview.end}`
+  const mediaError = mediaFailure?.key === previewKey ? mediaFailure.message : null
+  useLayoutEffect(() => {
+    playingRef.current = playing
+    onPlayheadRef.current = onPlayhead
+    onPlayingChangeRef.current = onPlayingChange
+  }, [playing, onPlayhead, onPlayingChange])
 
   useEffect(() => {
     handedOff.current = false
     seekingFromTimeline.current = false
-    setMediaError(null)
   }, [preview.url, preview.start, preview.end])
 
   useEffect(() => {
@@ -159,12 +162,12 @@ export function RenderedPreview({
         ref={videoRef}
         className="preview-source-video preview-rendered-video"
         crossOrigin="anonymous"
-        src={preview.url}
+        src={preview.url || undefined}
         preload="auto"
         playsInline
-        onLoadedData={() => setMediaError(null)}
+        onLoadedData={() => setMediaFailure(null)}
         onLoadedMetadata={(event) => syncRenderedTime(event.currentTarget, preview, playhead, playing, fps, total, seekingFromTimeline)}
-        onError={() => setMediaError('This rendered face-blur preview cannot be shown. Try rendering it again.')}
+        onError={() => setMediaFailure({ key: previewKey, message: 'This rendered face-blur preview cannot be shown. Try rendering it again.' })}
         onSeeked={() => { seekingFromTimeline.current = false }}
         onEnded={() => {
           if (playingRef.current && !seekingFromTimeline.current) handoff()

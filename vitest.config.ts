@@ -6,6 +6,8 @@ export default defineConfig({
     alias: { '@shared': resolve('src') }
   },
   test: {
+    reporters: [resolve('tests/reporters/vitest.ts')],
+    silent: 'passed-only',
     environment: 'jsdom',
     setupFiles: ['./tests/setup.ts'],
     include: ['src/**/*.test.{ts,tsx}', 'tests/*.test.ts'],

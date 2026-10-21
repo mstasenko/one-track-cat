@@ -30,7 +30,7 @@ export function ShortSourceBackdrop({ session, playing }: { session: EditSession
     <video
       ref={videoRef}
       className="preview-source-video preview-short-backdrop"
-      src={playbackPath}
+      src={playbackPath || undefined}
       muted
       playsInline
       preload="auto"

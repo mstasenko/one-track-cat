@@ -92,7 +92,8 @@ async function main() {
     otc_HEADLESS_TEST: '1',
     LIBGL_ALWAYS_SOFTWARE: process.env.LIBGL_ALWAYS_SOFTWARE ?? '1',
     GIO_USE_VFS: 'local',
-    NO_AT_BRIDGE: '1'
+    NO_AT_BRIDGE: '1',
+    PLAYWRIGHT_FORCE_TTY: process.env.PLAYWRIGHT_FORCE_TTY ?? '0'
   }
   // Moving XDG_RUNTIME_DIR also hides the desktop audio socket. Keep a real
   // audio clock for PCM tests instead of Chromium's discontinuous dummy sink.

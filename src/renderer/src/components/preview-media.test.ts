@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { EditSession, SourceSegment, TimelineSource, VideoSegment } from '@shared/types'
 import type { TimelinePosition } from '../model/timeline'
 import {
+  mediaSource,
   overlayNeedsResync,
   overlaySyncTolerances,
   previewMediaVolume,
@@ -9,6 +10,11 @@ import {
   secondaryPreviewMedia,
   type SecondaryPreviewMedia
 } from './preview-media'
+
+it('omits an absent media source instead of setting an empty src attribute', () => {
+  expect(mediaSource('')).toBeUndefined()
+  expect(mediaSource('media://video')).toBe('media://video')
+})
 
 const source = (id: string, path: string): TimelineSource => ({
   id,

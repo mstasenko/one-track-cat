@@ -257,10 +257,11 @@ describe('Preview', () => {
     expect(incoming.style.visibility).toBe('hidden')
     act(() => { presented?.(0, { mediaTime: 4.25 } as VideoFrameCallbackMetadata) })
     expect(incoming.style.visibility).toBe('visible')
-    expect(app.querySelector('.preview-transition-incoming')).toBeNull()
+    // Retain the preloader for its audio fade, but do not composite it twice.
+    expect(incomingTransitionVideo(app).parentElement?.style.opacity).toBe('0')
   })
 
-  it('starts a playing transition decoder muted and fades in on playing', () => {
+  it('keeps a playing primary muted while transition audio still uses the preloader', () => {
     const session = createSession(metadata)
     const sourceId = session.sources[0]?.id
     if (!sourceId) throw new Error('source missing')
@@ -283,7 +284,7 @@ describe('Preview', () => {
     expect(incoming.volume).toBe(0)
 
     act(() => { incoming.dispatchEvent(new Event('playing')) })
-    expect(incoming.volume).toBe(1)
+    expect(incoming.volume).toBe(0)
     expect(incoming.style.visibility).toBe('hidden')
   })
 

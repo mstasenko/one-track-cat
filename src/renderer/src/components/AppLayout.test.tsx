@@ -242,7 +242,7 @@ describe('editor workspace playback callbacks', () => {
     const nudgeShortFrame = vi.fn()
     const app = renderWorkspace({
       onPlayingChange,
-      store: { ...workspaceProps().store, nudgeShortFrame } as EditorState
+      store: { ...workspaceProps().store, nudgeShortFrame }
     })
     const arrow = app.querySelector('[data-testid="timeline-frame-left"]')
     if (!(arrow instanceof HTMLButtonElement)) throw new Error('framing callback missing')
@@ -259,7 +259,7 @@ describe('editor workspace playback callbacks', () => {
     const app = renderWorkspace({
       onPlayingChange,
       onSelectFaceBlur,
-      store: { ...workspaceProps().store, setPlayhead } as EditorState
+      store: { ...workspaceProps().store, setPlayhead }
     })
 
     const preview = app.querySelector('[data-testid="preview-playhead"]')
@@ -278,7 +278,7 @@ describe('editor workspace playback callbacks', () => {
     const app = renderWorkspace({
       onPlayingChange,
       onSelectFaceBlur,
-      store: { ...workspaceProps().store, setPlayhead } as EditorState
+      store: { ...workspaceProps().store, setPlayhead }
     })
 
     const timeline = app.querySelector('[data-testid="timeline-seek"]')

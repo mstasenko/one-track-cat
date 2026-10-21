@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useLayoutEffect, useRef } from 'react'
 import type { TimelinePosition } from '../model/timeline'
 import { isFreezeSegment } from '../model/timeline'
 
@@ -39,7 +39,7 @@ export function useFreezePlayback(
   onPlayhead: (time: number) => void
 ): void {
   const playheadRef = useRef(playhead)
-  playheadRef.current = playhead
+  useLayoutEffect(() => { playheadRef.current = playhead }, [playhead])
   const freeze = freezeContext(position)
   const freezeId = freeze?.id ?? ''
   const freezeDuration = freeze?.duration ?? 0

@@ -301,7 +301,7 @@ async function copyPreviousCache(
     record = await readPersistedCacheRecord(path)
     if (record) cacheRecord = record
   }
-  if (!record || record.baseKey !== identity.baseKey || record.path !== path
+  if (record?.baseKey !== identity.baseKey || record.path !== path
     || !compatibleCachedRanges(record.frameRanges, record.policies, identity.policies)) return undefined
   const before = await fileStamp(record.path)
   if (!before || !sameStamp(before, record.stamp)) return undefined
@@ -377,7 +377,7 @@ export async function prepareFaceDetectionCache(
     let replaced = false
     try {
       const currentIdentity = await cacheIdentity(sourceRequest)
-      if (!currentIdentity || currentIdentity.baseKey !== identity.baseKey
+      if (currentIdentity?.baseKey !== identity.baseKey
         || !samePolicies(currentIdentity.policies, identity.policies)) return
       const outputStamp = await fileStamp(outputPath)
       if (!outputStamp || outputStamp.size > detectionCacheMaximumBytes) return

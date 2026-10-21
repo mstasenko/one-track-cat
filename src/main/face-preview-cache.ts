@@ -208,7 +208,7 @@ export async function rememberFacePreview(key: string, path: string, range?: Fac
 
 export async function loadFacePreview(key: string, path: string): Promise<FacePreviewCacheRecord | undefined> {
   const record = await readPersistedRecord(cachePath(path))
-  if (!record || record.key !== key) return undefined
+  if (record?.key !== key) return undefined
   const outputStamp = await fileStamp(path)
   if (!outputStamp || !sameStamp(outputStamp, record.outputStamp)) return undefined
   return record
@@ -236,7 +236,7 @@ export async function loadFacePreviewRange(
   path: string
 ): Promise<FacePreviewCacheRecord | undefined> {
   const record = await readPersistedRecord(rangeCachePath(path))
-  if (!record || record.key !== key) return undefined
+  if (record?.key !== key) return undefined
   const outputStamp = await fileStamp(path)
   if (!outputStamp || !sameStamp(outputStamp, record.outputStamp)) return undefined
   return record

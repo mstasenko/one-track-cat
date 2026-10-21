@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { aiTargetFps, aiTargetLongEdge, type AiEnhancementOptions, type EditSession, type FaceBlurSettings } from '@shared/types'
 import './components/video-picker.css'
 import { EditorWorkspace, GpuWarning, StatusBanners, Welcome } from './components/AppLayout'
@@ -71,16 +71,16 @@ export default function App(): React.JSX.Element {
   const previewActive = facePreview.rendering
   const resetBlockedRef = useRef(false)
   const resetDialogOpenRef = useRef(false)
-  resetBlockedRef.current = exporting || previewActive || pickerOpen || exportDialogOpen
-  resetDialogOpenRef.current = resetDialogOpen
+  useLayoutEffect(() => {
+    resetBlockedRef.current = exporting || previewActive || pickerOpen || exportDialogOpen
+    resetDialogOpenRef.current = resetDialogOpen
+  }, [exporting, previewActive, pickerOpen, exportDialogOpen, resetDialogOpen])
 
-  useEffect(() => {
-    if (pickerOpen) setPlaying(false)
-  }, [pickerOpen])
+  useEffect(() => useVideoPickerStore.subscribe((next, previous) => {
+    if (next.open && !previous.open) setPlaying(false)
+  }), [])
 
-  useEffect(() => {
-    if (selectedFaceBlurId && !selectedFaceBlur) setSelectedFaceBlurId(null)
-  }, [selectedFaceBlurId, selectedFaceBlur])
+  if (selectedFaceBlurId && !selectedFaceBlur) setSelectedFaceBlurId(null)
 
   const onSelectFaceBlur = useCallback((id: string | null): void => {
     setSelectedFaceBlurId(id)

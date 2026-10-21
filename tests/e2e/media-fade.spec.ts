@@ -183,12 +183,12 @@ async function runMediaFadeCase(kind: MediaKind): Promise<void> {
   }
 }
 
-test('fades image overlays in preview, timeline hover, export, and saved sessions', async () => {
+test('Image fades: preview, export and restore', async () => {
   test.setTimeout(90_000)
   await runMediaFadeCase('image')
 })
 
-test('fades video overlays in preview, timeline hover, export, and saved sessions', async () => {
+test('Video fades: preview, export and restore', async () => {
   test.setTimeout(90_000)
   await runMediaFadeCase('video')
 })

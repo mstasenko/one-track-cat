@@ -14,7 +14,7 @@ function recordFrameRange(line: string, ranges: [number, number][]): boolean {
     || !Number.isInteger(count) || count < 0 || count > 256 || fields.length !== 3 + count * 5) return false
   const previous = ranges.at(-1)
   if (previous && frame < previous[1]) return false
-  if (previous && frame === previous[1]) previous[1] = frame + 1
+  if (frame === previous?.[1]) previous[1] = frame + 1
   else {
     // Keep this optional optimization bounded even for an unusually fragmented cache.
     if (ranges.length >= 1024) return false

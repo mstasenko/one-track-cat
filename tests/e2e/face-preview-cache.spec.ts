@@ -98,7 +98,7 @@ function workerStarts(path: string): number {
   }
 }
 
-test('restores a real cached face preview across a normal-close restart without starting the worker again', async () => {
+test('Restore cached preview without rerendering', async () => {
   test.setTimeout(120_000)
   const fixture = runtimeFixture()
   const input = syntheticVideo(fixture.cwd, true)
@@ -161,7 +161,7 @@ test('restores a real cached face preview across a normal-close restart without 
   }
 })
 
-test('keeps two disjoint face previews through a second apply and restart', async () => {
+test('Restore two separate face ranges', async () => {
   test.setTimeout(120_000)
   const fixture = runtimeFixture()
   const input = syntheticVideo(fixture.cwd, true)
