@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { focusZoomAmounts } from '@shared/types'
-import { focusZoomAmountAtProgress, focusZoomDefaultTransitionDuration, focusZoomTransitionDuration, smoothstep } from '@shared/focus-zoom'
+import { circleDrawDuration, focusCircleGeometry, focusZoomAmountAtProgress, focusZoomDefaultTransitionDuration, focusZoomTransitionDuration, smoothstep } from '@shared/focus-zoom'
 import { addFocusZoom, focusCameraTransformAtTime, focusCropAtTime, removeFocusZoomFromRange } from './focus-zoom'
 import { createSession, timelineDuration } from './timeline'
 import { timedRangesAfterRemoval } from './timed-ranges'
@@ -24,6 +24,28 @@ describe('focus zoom', () => {
     expect(focusCropAtTime(effect, 5).zoom).toBe(1)
     expect(focusCameraTransformAtTime([effect], 3.5)).toBe('scale(10) translate(-90%, -5%)')
     expect(focusCameraTransformAtTime([effect], 6)).toBeUndefined()
+  })
+
+  it('keeps circle geometry inside the output frame', () => {
+    const geometry = focusCircleGeometry({ focusX: 0, focusY: 1, zoom: 2 }, { width: 320, height: 180 })
+    expect(geometry.x).toBe(0)
+    expect(geometry.y).toBeCloseTo(100.8)
+    expect(geometry.size).toBeCloseTo(79.2)
+    expect(geometry.borderWidth).toBe(2)
+    const centered = focusCircleGeometry({ focusX: 0.5, focusY: 0.5, zoom: 2 }, { width: 1920, height: 1080 })
+    expect(centered.x).toBeCloseTo(722.4)
+    expect(centered.y).toBeCloseTo(302.4)
+    expect(centered.size).toBeCloseTo(475.2)
+    expect(centered.borderWidth).toBeCloseTo(11.88)
+  })
+
+  it('uses the full circle duration and skips frame transforms for circle mode', () => {
+    const effect = { id: 'circle', start: 0, duration: 0.3, transitionDuration: 0.5, mode: 'circle' as const, zoom: 2 as const, focusX: 0.5, focusY: 0.5 }
+    expect(circleDrawDuration(effect)).toBe(0.3)
+    expect(circleDrawDuration({ duration: 2 })).toBe(0.5)
+    expect(circleDrawDuration({ duration: 2, transitionDuration: 4 })).toBe(2)
+    expect(focusCameraTransformAtTime([effect], 0.15)).toBeUndefined()
+    expect(addFocusZoom(createSession(source), 1, 2, 2, 0.5, 0.5, 0.5, 'circle').focusZooms[0]?.mode).toBe('circle')
   })
 
   it('uses a fractional smoothstep transition and caps it at half the effect', () => {

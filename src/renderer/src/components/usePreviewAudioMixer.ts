@@ -4,6 +4,11 @@ import { previewMediaVolume } from './preview-media'
 interface RoutedMedia {
   source: MediaElementAudioSourceNode
   gain: GainNode
+  gate?: AudioWorkletNode
+  targetGain?: number
+  rampStart?: number
+  rampStartGain?: number
+  rampEnd?: number
 }
 
 export interface PreviewAudioMixer {
@@ -16,6 +21,7 @@ function disconnectMedia(media: HTMLMediaElement, routes: Map<HTMLMediaElement, 
   const route = routes.get(media)
   if (!route) return
   route.source.disconnect()
+  route.gate?.disconnect()
   route.gain.disconnect()
   routes.delete(media)
 }
@@ -26,14 +32,47 @@ function connectMedia(
   limiter: DynamicsCompressorNode,
   sources: WeakMap<HTMLMediaElement, MediaElementAudioSourceNode>,
   routes: Map<HTMLMediaElement, RoutedMedia>
-): void {
+): RoutedMedia {
   const source = sources.get(media) ?? context.createMediaElementSource(media)
   sources.set(media, source)
   const gain = context.createGain()
-  source.connect(gain)
+  // A newly registered decoder must stay silent until its owner schedules a fade-in.
+  gain.gain.value = 0
   gain.connect(limiter)
   media.volume = 1
-  routes.set(media, { source, gain })
+  const route = { source, gain }
+  routes.set(media, route)
+  return route
+}
+
+function connectStartupGate(context: AudioContext, route: RoutedMedia): void {
+  if (typeof AudioWorkletNode !== 'function') throw new Error('AudioWorkletNode is unavailable')
+  const gate = new AudioWorkletNode(context, 'otc-preview-startup', {
+    numberOfInputs: 1,
+    numberOfOutputs: 1,
+    channelCount: 2,
+    channelCountMode: 'explicit',
+    outputChannelCount: [2]
+  })
+  try {
+    route.source.connect(gate)
+    gate.connect(route.gain)
+    route.gate = gate
+  } catch (error) {
+    route.source.disconnect()
+    gate.disconnect()
+    throw error
+  }
+}
+
+function routedGainAt(route: RoutedMedia, time: number, fallback: number): number {
+  const { targetGain, rampStart, rampStartGain, rampEnd } = route
+  if (targetGain === undefined || rampStart === undefined || rampStartGain === undefined || rampEnd === undefined) {
+    return fallback
+  }
+  if (time <= rampStart) return rampStartGain
+  if (time >= rampEnd) return targetGain
+  return rampStartGain + (targetGain - rampStartGain) * ((time - rampStart) / (rampEnd - rampStart))
 }
 
 export function usePreviewAudioMixer(): PreviewAudioMixer {
@@ -43,6 +82,7 @@ export function usePreviewAudioMixer(): PreviewAudioMixer {
   const routesRef = useRef(new Map<HTMLMediaElement, RoutedMedia>())
   const failedRef = useRef(false)
   const disposalRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const startupWorkletRef = useRef<Promise<boolean> | null>(null)
 
   const ensureContext = useCallback((): AudioContext | null => {
     if (contextRef.current) return contextRef.current
@@ -65,19 +105,49 @@ export function usePreviewAudioMixer(): PreviewAudioMixer {
     }
   }, [])
 
+  const ensureStartupWorklet = useCallback((context: AudioContext): Promise<boolean> => {
+    if (startupWorkletRef.current) return startupWorkletRef.current
+    startupWorkletRef.current = (async () => {
+      try {
+        const audioWorklet = (context as unknown as { audioWorklet?: AudioWorklet }).audioWorklet
+        if (!audioWorklet) throw new Error('AudioWorklet is unavailable')
+        await audioWorklet.addModule(new URL('./preview-audio-worklet.js?no-inline', import.meta.url).href)
+        return true
+      } catch (error) {
+        console.error('Preview audio startup gate failed to load; using direct audio routing.', error)
+        return false
+      }
+    })()
+    return startupWorkletRef.current
+  }, [])
+
   const register = useCallback((media: HTMLMediaElement): (() => void) => {
     if (routesRef.current.has(media)) return () => undefined
     const context = ensureContext()
     const limiter = limiterRef.current
     if (!context || !limiter) return () => undefined
     try {
-      connectMedia(media, context, limiter, sourcesRef.current, routesRef.current)
+      const route = connectMedia(media, context, limiter, sourcesRef.current, routesRef.current)
+      void ensureStartupWorklet(context).then((useStartupGate) => {
+        if (routesRef.current.get(media) !== route) return
+        try {
+          if (useStartupGate) connectStartupGate(context, route)
+          else route.source.connect(route.gain)
+        } catch (error) {
+          console.error('Preview audio startup gate failed; using direct audio routing.', error)
+          if (routesRef.current.get(media) === route) {
+            try { route.source.connect(route.gain) } catch (fallbackError) {
+              console.error('Preview audio direct routing also failed.', fallbackError)
+            }
+          }
+        }
+      })
       return () => disconnectMedia(media, routesRef.current)
     } catch {
       failedRef.current = true
       return () => undefined
     }
-  }, [ensureContext])
+  }, [ensureContext, ensureStartupWorklet])
 
   const setGain = useCallback((media: HTMLMediaElement, gain: number, delay = 0, duration = 0.02): void => {
     const safeGain = Number.isFinite(gain) ? Math.max(0, Math.min(2, gain)) : 1
@@ -91,7 +161,13 @@ export function usePreviewAudioMixer(): PreviewAudioMixer {
     }
     const parameter = route.gain.gain
     const now = context.currentTime
-    const current = parameter.value
+    const end = now + safeDelay + safeDuration
+    // Handoff/path-change effects can ask to mute an already fading decoder.
+    // Extending that fade lets its source end/seek while still audible.
+    if (route.targetGain === safeGain && route.rampEnd !== undefined && route.rampEnd <= end) return
+    // AudioParam.value may lag an active automation curve by a render quantum.
+    // Every route ramp is created here, so evaluate its exact held value instead.
+    const current = routedGainAt(route, now, parameter.value)
     if (typeof parameter.cancelAndHoldAtTime === 'function') {
       parameter.cancelAndHoldAtTime(now)
     } else {
@@ -101,7 +177,11 @@ export function usePreviewAudioMixer(): PreviewAudioMixer {
     // Always start at the current value, or a new ramp can jump toward its target.
     parameter.setValueAtTime(current, now)
     if (safeDelay > 0) parameter.setValueAtTime(current, now + safeDelay)
-    parameter.linearRampToValueAtTime(safeGain, now + safeDelay + safeDuration)
+    parameter.linearRampToValueAtTime(safeGain, end)
+    route.targetGain = safeGain
+    route.rampStart = now + safeDelay
+    route.rampStartGain = current
+    route.rampEnd = end
   }, [])
 
   const resume = useCallback((): void => {
@@ -117,8 +197,9 @@ export function usePreviewAudioMixer(): PreviewAudioMixer {
       // React development Strict Mode replays effects without replacing the media
       // element. Deferring disposal lets that immediate remount retain its context.
       disposalRef.current = setTimeout(() => {
-        routes.forEach(({ source, gain }) => {
+        routes.forEach(({ source, gate, gain }) => {
           source.disconnect()
+          gate?.disconnect()
           gain.disconnect()
         })
         routes.clear()
@@ -126,6 +207,7 @@ export function usePreviewAudioMixer(): PreviewAudioMixer {
         const context = contextRef.current
         contextRef.current = null
         limiterRef.current = null
+        startupWorkletRef.current = null
         if (context && context.state !== 'closed') void context.close().catch(() => undefined)
       }, 0)
     }

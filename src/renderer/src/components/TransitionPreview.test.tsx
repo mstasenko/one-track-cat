@@ -205,6 +205,22 @@ describe('OutgoingTransitionVideo', () => {
     expect(clock.time()).toBe(2)
   })
 
+  it('does not rewind a retained audio tail while fading it out', async () => {
+    const harness = makeMixer()
+    const active = preloadProps(harness.mixer, { playing: true, preloadRate: 1, showFallback: true, audibleFallback: true })
+    const video = mountPreload(active)
+    const clock = mediaClock(video, 0.021)
+    await act(async () => {
+      root?.render(<OutgoingTransitionVideo preview={null} fit="contain" {...active} preloadTime={0.01}
+        showFallback={false} audibleFallback={false} />)
+      await Promise.resolve()
+    })
+    expect(clock.setter).not.toHaveBeenCalled()
+    expect(harness.setGain).toHaveBeenLastCalledWith(video, 0)
+    renderPreload({ ...active, preloadRate: 0, showFallback: false, audibleFallback: false })
+    expect(clock.time()).toBe(0)
+  })
+
   it('shows a transition frame when decoding becomes ready after its seek', () => {
     container = document.createElement('div')
     document.body.append(container)

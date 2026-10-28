@@ -206,20 +206,6 @@ describe('editor store', () => {
     expect(useEditorStore.getState().session?.overlays).toHaveLength(1)
   })
 
-  it('clears the current mark selection without deleting media', () => {
-    const session = createSession(metadata)
-    session.marks = [1, 2, 6, 8]
-    session.playhead = 4
-    useEditorStore.setState({ session, history: [], future: [] })
-    const segments = session.segments
-
-    useEditorStore.getState().clearMarks()
-    expect(useEditorStore.getState().session?.marks).toEqual([1, 8])
-    expect(useEditorStore.getState().session?.segments).toBe(segments)
-    useEditorStore.getState().undo()
-    expect(useEditorStore.getState().session?.marks).toEqual([1, 2, 6, 8])
-  })
-
   it('keeps Appears at fixed when Visible for reaches the timeline end', async () => {
     await useEditorStore.getState().loadVideo('/source.mp4')
     useEditorStore.getState().setPlayhead(8)

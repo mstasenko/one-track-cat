@@ -38,7 +38,7 @@ it('groups short passing names without blank rows, diagnostics or repeated headi
 
 it('uses sentence case across suites and tests without changing identifiers or acronyms', () => {
   expect(suiteName('/tests/face-apply.spec.ts')).toBe('Face apply')
-  expect(suiteName('/tests/ai-export.test.tsx')).toBe('AI export')
+  expect(suiteName('/tests/upscale-export.test.tsx')).toBe('Upscale export')
   expect(suiteName('/tests/Preview.handoff.test.tsx')).toBe('Preview handoff')
   expect(testName('  restores\n  GPU state  ')).toBe('Restores GPU state')
   expect(testName('uses cpu and gpu for ai')).toBe('Uses CPU and GPU for AI')

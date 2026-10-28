@@ -1,18 +1,18 @@
 import { createHash } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { ExportRequest } from '../types'
-import { ffmpegPath, ffprobePath } from './binaries'
+import { ffmpegPath } from './binaries'
 import { buildFilterGraph, prepareTimelineInputs } from './exporter'
 import { applyPreviewSeek, preparePreviewSeek, previewSeekPlan, type PreviewSeekPlan } from './preview-seek'
 import { previewFilterGraph, validatedPreviewRange, type PreviewRange } from './preview-range'
 
 vi.mock('electron', () => ({ app: { isPackaged: false }, BrowserWindow: { getAllWindows: () => [] } }))
 vi.mock('./jobs', () => ({ jobs: { run: vi.fn() } }))
-vi.mock('./face-worker', () => ({ restrictedIntelRenderNode: vi.fn().mockResolvedValue(undefined) }))
+vi.mock('./intel-device', () => ({ restrictedIntelRenderNode: vi.fn().mockResolvedValue(undefined) }))
 vi.mock('./privileged-export', () => ({ encodeWithPrivilegedGpu: vi.fn() }))
 vi.mock('./face-export', () => ({ encodeWithFaces: vi.fn() }))
 vi.mock('./face-preview-cache', () => ({ tryReuseFacePreview: vi.fn().mockResolvedValue(false) }))
@@ -24,14 +24,6 @@ const audioRate = 48_000
 const directory = mkdtempSync(join(tmpdir(), 'otc-preview-seek-real-'))
 const sources = new Map<number, string>()
 const preciseSources = new Map<number, string>()
-
-interface VideoProbe {
-  streams?: { width?: number; height?: number; r_frame_rate?: string; duration?: string; codec_name?: string }[]
-}
-
-interface AudioProbe {
-  streams?: { index?: number }[]
-}
 
 function runFfmpeg(args: string[]): void {
   const result = spawnSync(ffmpegPath(), ['-hide_banner', '-loglevel', 'error', '-y', ...args], { encoding: 'utf8' })
@@ -47,6 +39,21 @@ function createSource(fps: number, container = 'mkv'): string {
     '-f', 'lavfi', '-i', `sine=frequency=440:sample_rate=${audioRate}:duration=12`,
     '-map', '0:v:0', '-map', '1:a:0', '-t', '12', '-c:v', 'ffv1', '-level', '3', '-threads', '1',
     '-pix_fmt', 'yuv420p', '-c:a', 'pcm_s16le', '-ar', String(audioRate), '-ac', '2', path
+  ])
+  return path
+}
+
+function createHevcSource(): string {
+  const path = join(directory, 'long-gop-hevc.mkv')
+  runFfmpeg([
+    '-f', 'lavfi', '-i', `testsrc2=size=${width}x48:rate=24:duration=6`,
+    '-f', 'lavfi', '-i', `sine=frequency=440:sample_rate=${audioRate}:duration=6`,
+    '-map', '0:v:0', '-map', '1:a:0', '-t', '6',
+    '-af', 'asetpts=PTS+0.125/TB',
+    '-c:v', 'libx265', '-preset', 'ultrafast',
+    '-x265-params', 'keyint=48:min-keyint=48:scenecut=0:open-gop=0:pools=1:frame-threads=1:log-level=error',
+    '-threads', '1', '-pix_fmt', 'yuv420p',
+    '-c:a', 'aac', '-b:a', '64k', '-ar', String(audioRate), '-ac', '2', path
   ])
   return path
 }
@@ -144,85 +151,38 @@ describe('selected-preview input seeking preserves composition bytes', () => {
   }, 60_000)
 })
 
-const optionalProject = process.env.otc_PREVIEW_SEEK_PROJECT
+describe('generated long-GOP HEVC selected-preview validation', () => {
+  let hevcSource: string
 
-describe('optional selected-project CPU validation', () => {
-  it.skipIf(!optionalProject)('matches the later selected range in an existing project', async () => {
-    if (!optionalProject) throw new Error('optional project path disappeared')
-    const snapshot = JSON.parse(readFileSync(optionalProject, 'utf8')) as ExportRequest
-    const request: ExportRequest = { ...snapshot, canvas: { ...snapshot.canvas, width, height }, outputPath: join(directory, 'project-unused.mp4') }
-    expect(request.overlays).toHaveLength(0)
-    const start = Number(process.env.otc_PREVIEW_SEEK_PROJECT_START ?? snapshot.faceBlurs?.at(-1)?.start)
-    const selected = validatedPreviewRange([start, start + 1], request)
-    if (!selected) throw new Error('optional project range was unexpectedly empty')
-    const started = performance.now()
-    const full = await render(request, selected, false, 'project-full')
-    const fullMs = performance.now() - started
-    const seekStarted = performance.now()
-    const sought = await render(request, selected, true, 'project-seek')
-    const seekMs = performance.now() - seekStarted
-    process.stdout.write(`${JSON.stringify({
-      test: 'selected-project', fullMs, seekMs,
-      videoEqual: sought.video.equals(full.video), audioEqual: sought.audio.equals(full.audio),
-      frames: sought.video.length / (width * height * 3), audioSamples: sought.audio.length / 4,
-      selected, preparationStart: sought.seek?.offset, segmentCount: sought.segmentCount
-    })}\n`)
-    expect(sought.segmentCount).toBe(1)
-    expect(sought.seek?.offset).toBeGreaterThan(selected[0] - 2 - 1 / request.canvas.fps)
-    expect(sought.video.equals(full.video)).toBe(true)
-    expect(sought.audio.equals(full.audio)).toBe(true)
-  }, 600_000)
-})
+  beforeAll(() => {
+    hevcSource = createHevcSource()
+  })
 
-const optionalHevc = process.env.otc_PREVIEW_SEEK_HEVC_PATH
-const hasOptionalHevc = Boolean(optionalHevc && existsSync(optionalHevc))
-const optionalHevcStart = Number(process.env.otc_PREVIEW_SEEK_HEVC_START ?? '204.470933')
-
-function probeOptionalHevc(path: string): { fps: number; duration: number; hasAudio: boolean; codec: string; width: number; height: number } {
-  const video = spawnSync(ffprobePath(), [
-    '-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=width,height,r_frame_rate,duration,codec_name', '-of', 'json', path
-  ], { encoding: 'utf8' })
-  const audio = spawnSync(ffprobePath(), ['-v', 'error', '-select_streams', 'a:0', '-show_entries', 'stream=index', '-of', 'json', path], { encoding: 'utf8' })
-  if (video.status !== 0 || audio.status !== 0) throw new Error('ffprobe failed for optional HEVC input')
-  const videoProbe = JSON.parse(video.stdout) as VideoProbe
-  const audioProbe = JSON.parse(audio.stdout) as AudioProbe
-  const stream = videoProbe.streams?.[0]
-  const [numerator, denominator] = (stream?.r_frame_rate ?? '').split('/').map(Number)
-  if (numerator === undefined || denominator === undefined) throw new Error('optional HEVC input lacks frame rate metadata')
-  const fps = numerator / denominator
-  const duration = Number(stream?.duration)
-  const hasAudio = Array.isArray(audioProbe.streams) && audioProbe.streams.length > 0
-  if (!stream || !Number.isFinite(fps) || !Number.isFinite(duration) || !stream.width || !stream.height || !stream.codec_name) {
-    throw new Error('optional HEVC input lacks usable stream metadata')
-  }
-  return { fps, duration, hasAudio, codec: stream.codec_name, width: stream.width, height: stream.height }
-}
-
-describe('optional selected-preview HEVC validation', () => {
-  it.skipIf(!hasOptionalHevc)('matches selected RGB frames and audio against the full path', async () => {
-    if (!optionalHevc) throw new Error('optional HEVC path disappeared')
-    const metadata = probeOptionalHevc(optionalHevc)
-    expect(metadata.codec).toMatch(/hevc/i)
-    expect(metadata.duration).toBeGreaterThan(optionalHevcStart + 2)
-    const initialRequest: ExportRequest = {
-      canvas: { width: 64, height: 36, fps: metadata.fps, fit: 'contain' },
-      sources: [{ id: 'source', metadata: {
-        path: optionalHevc, name: 'optional-hevc', size: 1, modifiedAt: 1, duration: metadata.duration,
-        width: metadata.width, height: metadata.height, fps: metadata.fps, videoCodec: metadata.codec, hasAudio: metadata.hasAudio
-      } }],
-      segments: [{ id: 'segment', sourceId: 'source', sourceStart: 0, sourceEnd: optionalHevcStart + 2 }],
-      overlays: [], outputPath: join(directory, 'optional-hevc.mp4')
+  it('matches selected RGB frames and audio for nonzero source offsets in a later clip', async () => {
+    const fps = 24
+    const metadata = {
+      path: hevcSource, name: 'generated-long-gop-hevc.mkv', size: 1, modifiedAt: 1, duration: 6,
+      width, height: 48, fps, videoCodec: 'hevc', hasAudio: true
     }
-    const selected = validatedPreviewRange([optionalHevcStart, optionalHevcStart + 1], initialRequest)
-    if (!selected) throw new Error('optional HEVC range was unexpectedly empty')
-    const initialSegment = initialRequest.segments[0]
-    if (!initialSegment || initialSegment.kind === 'freeze') throw new Error('optional HEVC segment was unexpectedly empty')
-    const request: ExportRequest = { ...initialRequest, segments: [{ ...initialSegment, sourceEnd: selected[1] + 1 }] }
-    const full = await render(request, selected, false, 'optional-hevc-full')
-    const sought = await render(request, selected, true, 'optional-hevc-seek')
+    const request: ExportRequest = {
+      canvas: { width, height: 48, fps, fit: 'contain' },
+      sources: [{ id: 'source', metadata }],
+      segments: [
+        { id: 'prefix', sourceId: 'source', sourceStart: 0.5, sourceEnd: 2.5 },
+        { id: 'selected', sourceId: 'source', sourceStart: 1, sourceEnd: 5.5 }
+      ],
+      overlays: [], outputPath: join(directory, 'generated-hevc-unused.mp4')
+    }
+    const selected = validatedPreviewRange([4.1, 5.1], request)
+    if (!selected) throw new Error('generated HEVC range was unexpectedly empty')
+    const full = await render(request, selected, false, 'generated-hevc-full')
+    const sought = await render(request, selected, true, 'generated-hevc-seek')
+    expect(sought.segmentCount).toBe(1)
+    expect(sought.seek?.audioOffset).toBe(2)
+    expect(sought.seek?.offset).toBeGreaterThan(selected[0] - 2 - 1 / fps)
     expect(sought.video).toEqual(full.video)
     expect(sought.audio).toEqual(full.audio)
-  }, 600_000)
+  }, 60_000)
 })
 
 afterAll(() => {

@@ -12,7 +12,7 @@ vi.mock('./binaries', () => ({
   ffprobePath: () => join(process.cwd(), 'node_modules', 'ffprobe-static', 'bin', 'linux', 'x64', 'ffprobe')
 }))
 vi.mock('./jobs', () => ({ jobs: { run: vi.fn() } }))
-vi.mock('./face-worker', () => ({ restrictedIntelRenderNode: vi.fn().mockResolvedValue(undefined) }))
+vi.mock('./intel-device', () => ({ restrictedIntelRenderNode: vi.fn().mockResolvedValue(undefined) }))
 vi.mock('./privileged-export', () => ({ encodeWithPrivilegedGpu: vi.fn() }))
 vi.mock('./face-export', () => ({ encodeWithFaces: vi.fn() }))
 vi.mock('./face-preview-cache', () => ({ tryReuseFacePreview: vi.fn().mockResolvedValue(false) }))

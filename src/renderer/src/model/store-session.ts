@@ -1,6 +1,7 @@
 import type { EditSession, Overlay, SavedSession, SavedSessionSnapshot } from '@shared/types'
 import type { EditorState } from './editor-state'
-import { clamp, timelineDuration } from './timeline'
+import { isNarrationSubtitle } from './narration-subtitles'
+import { clamp, timelineDuration, withCutTransitions } from './timeline'
 import { restoreTransitionHandles } from './transition-handles'
 import { fitVideoRangeTransition } from '@shared/video-range-transition'
 import { legacyShortFrameMovesToPoints, normalizeShortFramePoints } from '@shared/short-frame'
@@ -74,7 +75,7 @@ export function patchedOverlaySession(
   const duration = timelineDuration(session.segments)
   const index = session.overlays.findIndex((overlay) => overlay.id === id)
   const current = session.overlays[index]
-  if (!current) return session
+  if (!current || isNarrationSubtitle(current)) return session
   const changed = { ...current, ...patch } as Overlay
   if (patch.duration !== undefined && patch.start === undefined) {
     changed.duration = Math.min(patch.duration, Math.max(0.001, duration - current.start))
@@ -140,6 +141,8 @@ async function restoredSession(
   delete savedWithoutLegacy.shortFramePoints
   return restoreTransitionHandles({
     ...savedWithoutLegacy,
+    selectedOverlayId: saved.overlays.some((overlay) => overlay.id === saved.selectedOverlayId && isNarrationSubtitle(overlay)) ? null : saved.selectedOverlayId,
+    segments: withCutTransitions(saved.segments),
     canvas,
     sources,
     overlays: saved.overlays.map((overlay) => normalizeOverlay(overlay, duration)),

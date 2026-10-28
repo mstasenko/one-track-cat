@@ -35,15 +35,16 @@ export function loopsInput(overlay: Overlay): boolean {
   return overlay.type === 'gif' || (overlay.type === 'video' && overlay.loop)
 }
 
-function stillInput(overlay: Overlay): boolean {
-  return overlay.type === 'image' || overlay.type === 'text'
+/** Clone the one decoded still frame on demand instead of decoding a PNG video
+ * ahead of its overlay. Hundreds of caption loops can otherwise retain GiB. */
+export function stillFrameFilter(duration: number): string {
+  return `tpad=stop_mode=clone:stop_duration=${Math.max(0, duration).toFixed(6)}`
 }
 
 export async function overlayInputArgs(overlay: Overlay, directory: string): Promise<string[]> {
   if (needsAudioValidation(overlay)) throw new Error(`Video clip has no audio stream: ${overlay.name}`)
   const path = overlay.type === 'audio' ? overlay.path : await prepareVisualPath(overlay, directory)
   const options: string[] = []
-  if (stillInput(overlay)) options.push('-loop', '1')
   if (loopsInput(overlay)) options.push('-stream_loop', '-1')
   return [...options, '-threads', '2', '-i', path]
 }

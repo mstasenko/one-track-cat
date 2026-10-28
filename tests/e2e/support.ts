@@ -75,14 +75,18 @@ export async function click(locator: Locator, options: ClickOptions = {}): Promi
   await locator.click({ ...options, force: true })
 }
 
-export async function startExport(page: Page, aiEnhance = false): Promise<void> {
+export async function startExport(page: Page, upscale: boolean | 'turbo' | 'base' = false): Promise<void> {
   await click(page.getByRole('button', { name: 'Export', exact: true }))
   const dialog = page.getByRole('dialog', { name: 'Export video' })
   await expect(dialog).toBeVisible()
-  if (aiEnhance) {
-    const checkbox = dialog.getByRole('checkbox', { name: 'AI enhance to 4K / 60 fps' })
-    await expect(checkbox).toBeEnabled()
-    await click(checkbox)
+  const selector = dialog.locator('#upscale-select')
+  if (upscale) {
+    const mode = upscale === true ? 'turbo' : upscale
+    await expect(selector).toBeEnabled()
+    await selector.selectOption(mode)
+    await expect(selector).toHaveValue(mode)
+  } else {
+    await expect(selector).toHaveValue('off')
   }
   const start = dialog.getByRole('button', { name: 'Start', exact: true })
   await expect(start).toBeEnabled()

@@ -4,11 +4,14 @@ import type { ExportRequest, FaceBlurEffect, HardwareLabel } from '../types'
 import { ffmpegPath } from './binaries'
 import { exportEncoders, hardwareLabelForRenderNode, softwareEncoder, type ExportEncoder } from './export-encoder'
 import { requireFacePack } from './face-pack'
+import { ensureFaceModels } from './face-models'
 import { FaceAuthorizationError, runFacePipeline, type FaceCommand, type FacePipelineCommands, type FacePipelineOptions } from './face-process'
 import { prepareFaceDetectionCache, type FaceDetectionCacheSession } from './face-detection-cache'
-import { buildFaceWorkerCommand, nativeFaceWorkerCommand, restrictedIntelRenderNode } from './face-worker'
+import { buildFaceWorkerCommand, nativeFaceWorkerCommand } from './face-worker'
+import { restrictedIntelRenderNode } from './intel-device'
 import { nutVideoRemuxCommand, privilegedFacePipelineCommand, privilegedVideoEncoderCommand, vaapiFfmpegPath } from './privileged-export'
 import { jobs } from './jobs'
+import { prepareFfmpegArguments } from './ffmpeg-arguments'
 
 export function faceEffectRows(effects: FaceBlurEffect[]): string {
   const styles = { pixelate: 0, blur: 1, mask: 2 }
@@ -144,13 +147,14 @@ export async function encodeWithFaces(
   context?: FaceDetectionContext
 ): Promise<void> {
   const pack = await requireFacePack()
+  await ensureFaceModels(pack, jobId)
   const cacheRequest = context?.sourceRequest ?? request
   const cacheFrameOffset = context?.frameOffset ?? 0
   let cache = await prepareFaceDetectionCache(cacheRequest, cacheFrameOffset)
+  const effects = join(directory, 'faces.tsv')
+  const video = join(directory, 'masked.mp4')
+  const audio = join(directory, 'audio.m4a')
   try {
-    const effects = join(directory, 'faces.tsv')
-    const video = join(directory, 'masked.mp4')
-    const audio = join(directory, 'audio.m4a')
     await writeFile(effects, faceEffectRows(request.faceBlurs ?? []))
     // Composite once, detect every final frame, then encode once. Audio is muxed back without re-encoding.
     // Face encoding reuses ordinary-export encoder settings so quality and thread bounds stay aligned.
@@ -176,8 +180,10 @@ export async function encodeWithFaces(
     const runAttempt = async (encoder: ExportEncoder, forceCpu: boolean, message?: string): Promise<void> => {
       const worker = await workerForAttempt(forceCpu)
       await rm(video, { force: true })
+      const commands = pipelineCommands(request, inputArgs, filter, duration, audio, video, worker, encoder)
+      commands[0].args = await prepareFfmpegArguments(commands[0].args, directory)
       await runFacePipeline(
-        pipelineCommands(request, inputArgs, filter, duration, audio, video, worker, encoder),
+        commands,
         jobId, duration, pipelineOptions(cache, {
           label: faceEncodingLabel(encoder.hardwareLabel), phase: 'encoding',
           authorizationMessage: authorizationRetryMessage,
@@ -206,8 +212,10 @@ export async function encodeWithFaces(
         const hardware = await hardwareLabelForRenderNode(restrictedNode)
         await rm(video, { force: true })
         restrictedAttemptStarted = true
+        const commands = privilegedPipelineCommands(request, inputArgs, filter, duration, audio, video, worker, restrictedNode, executable)
+        commands[0].args = await prepareFfmpegArguments(commands[0].args, directory)
         await runFacePipeline(
-          privilegedPipelineCommands(request, inputArgs, filter, duration, audio, video, worker, restrictedNode, executable),
+          commands,
           jobId, duration, pipelineOptions(cache, {
             label: faceEncodingLabel(hardware), phase: 'encoding',
             authorizationMessage: authorizationRetryMessage,
@@ -251,6 +259,10 @@ export async function encodeWithFaces(
     ], 'export', duration, jobId, fallbackMessage, { phase: 'finalizing', announce: false })
     await cache.commit()
   } finally {
-    await cache.cleanup()
+    try {
+      await cache.cleanup()
+    } finally {
+      await Promise.all([effects, video, audio].map((path) => rm(path, { force: true }).catch(() => undefined)))
+    }
   }
 }

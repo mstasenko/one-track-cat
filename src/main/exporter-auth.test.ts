@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ExportRequest } from '../types'
-import type { AiExportContext } from './ai-export'
+import type { UpscaleExportContext } from './upscale-export'
 
 const fsMocks = vi.hoisted(() => ({
   mkdir: vi.fn(),
@@ -22,7 +22,7 @@ const privilegedMocks = vi.hoisted(() => ({ encodeWithPrivilegedGpu: vi.fn() }))
 const jobMocks = vi.hoisted(() => ({ run: vi.fn() }))
 const cacheMocks = vi.hoisted(() => ({ tryReuseFacePreview: vi.fn() }))
 const timingMocks = vi.hoisted(() => ({ previewTimelineOffset: vi.fn() }))
-const aiMocks = vi.hoisted(() => ({ requireAiPack: vi.fn(), encodeWithAi: vi.fn() }))
+const upscaleMocks = vi.hoisted(() => ({ requireUpscalePack: vi.fn(), encodeWithUpscale: vi.fn() }))
 
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>()
@@ -31,13 +31,13 @@ vi.mock('node:fs/promises', async (importOriginal) => {
 })
 vi.mock('./export-encoder', () => encoderMocks)
 vi.mock('./face-export', () => faceMocks)
-vi.mock('./face-worker', () => workerMocks)
+vi.mock('./intel-device', () => workerMocks)
 vi.mock('./jobs', () => ({ jobs: jobMocks }))
 vi.mock('./privileged-export', () => privilegedMocks)
 vi.mock('./face-preview-cache', () => cacheMocks)
 vi.mock('./preview-timing', () => timingMocks)
-vi.mock('./ai-pack', () => ({ requireAiPack: aiMocks.requireAiPack }))
-vi.mock('./ai-export', () => ({ encodeWithAi: aiMocks.encodeWithAi }))
+vi.mock('./upscale-pack', () => ({ requireUpscalePack: upscaleMocks.requireUpscalePack }))
+vi.mock('./upscale-export', () => ({ encodeWithUpscale: upscaleMocks.encodeWithUpscale }))
 
 import { exportVideo } from './exporter'
 
@@ -79,42 +79,61 @@ beforeEach(() => {
   privilegedMocks.encodeWithPrivilegedGpu.mockResolvedValue(undefined)
   jobMocks.run.mockResolvedValue(undefined)
   cacheMocks.tryReuseFacePreview.mockResolvedValue(false)
-  aiMocks.requireAiPack.mockResolvedValue({ executable: '/ai-worker', models: '/models/seedvr2-test', rife: '/rife.xml' })
-  aiMocks.encodeWithAi.mockResolvedValue(undefined)
+  upscaleMocks.requireUpscalePack.mockResolvedValue({ executable: '/upscale-worker', models: '/models/seedvr2-test', rife: '/rife.xml' })
+  upscaleMocks.encodeWithUpscale.mockResolvedValue(undefined)
 })
 
 describe('restricted GPU export authorization', () => {
+  it.each([undefined, 'encoding failed', 'Job cancelled'])('uses a job-owned script for large graphs (%s)', async (failure) => {
+    if (failure) jobMocks.run.mockRejectedValue(new Error(failure))
+    const large: ExportRequest = { ...request, focusZooms: Array.from({ length: 64 }, (_, index) => ({
+      id: `circle-${index}`, start: index / 8, duration: 0.125, mode: 'circle',
+      zoom: 3, focusX: 0.5, focusY: 0.5
+    })) }
+    if (failure) await expect(exportVideo(large)).rejects.toThrow(failure)
+    else await expect(exportVideo(large)).resolves.toBeUndefined()
+
+    const saved = fsMocks.writeFile.mock.calls.find(([path]) => String(path).includes('/filter-'))
+    expect(saved).toBeDefined()
+    expect(Buffer.byteLength(String(saved?.[1]))).toBeGreaterThan(128 * 1024)
+    expect(saved?.[2]).toEqual({ mode: 0o600, flag: 'wx' })
+    const args = jobMocks.run.mock.calls[0]?.[1] as string[]
+    expect(args).toEqual(expect.arrayContaining(['-filter_complex_script', saved?.[0]]))
+    expect(args).not.toContain('-filter_complex')
+    expect(fsMocks.rm).toHaveBeenCalledWith('/exports/.otc-export-test', { recursive: true, force: true })
+  })
+
   it('loads spatial models for native 4K close-ups and passes only their ranges', async () => {
-    const aiRequest: ExportRequest = {
+    const upscaleRequest: ExportRequest = {
       ...request, canvas: { width: 3840, height: 2160, fps: 58.436707235803205, fit: 'contain' },
-      aiEnhance: { mode: 'base' },
+      upscale: { mode: 'base' },
       focusZooms: [{ id: 'zoom', start: 2, duration: 3, zoom: 3, focusX: 0.6, focusY: 0.4 }]
     }
-    await exportVideo(aiRequest)
-    expect(aiMocks.requireAiPack).toHaveBeenCalledWith({ spatial: true, mode: 'base' })
-    const context = aiMocks.encodeWithAi.mock.calls[0]?.[7] as AiExportContext
+    await exportVideo(upscaleRequest)
+    expect(upscaleMocks.requireUpscalePack).toHaveBeenCalledWith({ spatial: true, mode: 'base' })
+    const context = upscaleMocks.encodeWithUpscale.mock.calls[0]?.[7] as UpscaleExportContext
     expect(context.plan).toMatchObject({ spatial: true, interpolate: true, mode: 'base' })
     const range = context.plan.spatialRanges?.[0]
     expect(range?.[0]).toBeGreaterThanOrEqual(2)
-    expect(range?.[0]).toBeLessThan(2 + 1 / aiRequest.canvas.fps)
+    expect(range?.[0]).toBeLessThan(2 + 1 / upscaleRequest.canvas.fps)
     expect(range?.[1]).toBeGreaterThanOrEqual(5)
-    expect(range?.[1]).toBeLessThan(5 + 1 / aiRequest.canvas.fps)
-    expect(aiMocks.encodeWithAi.mock.calls[0]?.[2]).toMatchObject({ videoLabel: 'camera' })
+    expect(range?.[1]).toBeLessThan(5 + 1 / upscaleRequest.canvas.fps)
+    expect(upscaleMocks.encodeWithUpscale.mock.calls[0]?.[2]).toMatchObject({ videoLabel: 'camera' })
   })
 
   it('crops a 4K-source Short before AI and enhances only its zoom ranges', async () => {
-    const aiRequest: ExportRequest = {
+    const upscaleRequest: ExportRequest = {
       ...request,
       canvas: { width: 1080, height: 1920, fps: 60, fit: 'cover' },
       sources: request.sources.map((source) => ({ ...source, metadata: { ...source.metadata, width: 3840, height: 2160 } })),
-      aiEnhance: { mode: 'turbo' },
+      upscale: { mode: 'turbo' },
       focusZooms: [{ id: 'zoom', start: 2, duration: 3, zoom: 3, focusX: 0.6, focusY: 0.4 }]
     }
-    await exportVideo(aiRequest)
-    const context = aiMocks.encodeWithAi.mock.calls[0]?.[7] as AiExportContext
+    await exportVideo(upscaleRequest)
+    const context = upscaleMocks.encodeWithUpscale.mock.calls[0]?.[7] as UpscaleExportContext
     expect(context.plan).toMatchObject({ spatial: true, spatialRanges: [[2, 5]],
       canvas: { width: 2160, height: 3840, fps: 60 } })
-    const filter = aiMocks.encodeWithAi.mock.calls[0]?.[2] as { graph: string; videoLabel: string }
+    const filter = upscaleMocks.encodeWithUpscale.mock.calls[0]?.[2] as { graph: string; videoLabel: string }
     expect(filter.videoLabel).toBe('camera')
     expect(filter.graph).toContain('crop=1080:1920')
     expect(filter.graph.indexOf('crop=1080:1920')).toBeLessThan(filter.graph.indexOf('zoompan='))
@@ -128,24 +147,24 @@ describe('restricted GPU export authorization', () => {
     expect(fsMocks.rm).toHaveBeenCalledWith('/exports/.otc-export-test', { recursive: true, force: true })
   })
 
-  it('routes AI enhancement through the whole-export AI encoder only', async () => {
-    const aiRequest: ExportRequest = { ...request, aiEnhance: {} }
+  it('routes Upscaling through the whole-export AI encoder only', async () => {
+    const upscaleRequest: ExportRequest = { ...request, upscale: {} }
 
-    await exportVideo(aiRequest)
+    await exportVideo(upscaleRequest)
 
-    expect(aiMocks.requireAiPack).toHaveBeenCalledOnce()
-    expect(aiMocks.requireAiPack).toHaveBeenCalledWith({ spatial: true, mode: 'turbo' })
-    expect(aiMocks.encodeWithAi).toHaveBeenCalledOnce()
-    const call = aiMocks.encodeWithAi.mock.calls[0] as unknown[] | undefined
-    expect(call?.[0]).toBe(aiRequest)
+    expect(upscaleMocks.requireUpscalePack).toHaveBeenCalledOnce()
+    expect(upscaleMocks.requireUpscalePack).toHaveBeenCalledWith({ spatial: true, mode: 'turbo' })
+    expect(upscaleMocks.encodeWithUpscale).toHaveBeenCalledOnce()
+    const call = upscaleMocks.encodeWithUpscale.mock.calls[0] as unknown[] | undefined
+    expect(call?.[0]).toBe(upscaleRequest)
     expect(call?.[1]).toEqual(expect.arrayContaining(['-i', '/input.mp4']))
     expect(call?.[2]).toMatchObject({ videoLabel: 'basev', audioLabel: 'aout' })
     expect(call?.[3]).toBe('/exports/.otc-export-test')
     expect(call?.[5]).toBe(10)
     expect(typeof call?.[6]).toBe('string')
-    const context = call?.[7] as AiExportContext | undefined
+    const context = call?.[7] as UpscaleExportContext | undefined
     expect(context?.plan).toMatchObject({ spatial: true, mode: 'turbo' })
-    expect(context?.pack).toMatchObject({ executable: '/ai-worker', rife: '/rife.xml' })
+    expect(context?.pack).toMatchObject({ executable: '/upscale-worker', rife: '/rife.xml' })
     expect(cacheMocks.tryReuseFacePreview).not.toHaveBeenCalled()
     expect(faceMocks.encodeWithFaces).not.toHaveBeenCalled()
     expect(privilegedMocks.encodeWithPrivilegedGpu).not.toHaveBeenCalled()
@@ -154,33 +173,38 @@ describe('restricted GPU export authorization', () => {
   })
 
   it.each([[3840, 2160], [2160, 3840]])('exports %dx%d at 60 fps without requiring upscaler weights', async (width, height) => {
-    aiMocks.requireAiPack.mockImplementation((options?: { spatial?: boolean }) => {
+    upscaleMocks.requireUpscalePack.mockImplementation((options?: { spatial?: boolean }) => {
       if (options?.spatial !== false) return Promise.reject(new Error('Upscaler weights are not downloaded'))
-      return Promise.resolve({ executable: '/ai-worker', rife: '/rife.xml' })
+      return Promise.resolve({ executable: '/upscale-worker', rife: '/rife.xml' })
     })
-    const aiRequest: ExportRequest = {
+    const upscaleRequest: ExportRequest = {
       ...request,
       canvas: { ...request.canvas, width, height },
-      aiEnhance: { mode: 'turbo' }
+      upscale: { mode: 'turbo' }
     }
 
-    await exportVideo(aiRequest)
+    await exportVideo(upscaleRequest)
 
-    expect(aiMocks.requireAiPack).toHaveBeenCalledWith({ spatial: false })
-    expect(aiMocks.encodeWithAi).toHaveBeenCalledOnce()
+    expect(upscaleMocks.requireUpscalePack).toHaveBeenCalledWith({ spatial: false })
+    expect(upscaleMocks.encodeWithUpscale).toHaveBeenCalledOnce()
+    const call = upscaleMocks.encodeWithUpscale.mock.calls[0]
+    expect(call?.[0]).toMatchObject({ canvas: { fps: 60 } })
+    expect((call?.[2] as { graph: string }).graph).toContain('fps=60')
+    expect((call?.[7] as UpscaleExportContext).plan.interpolationRanges).toEqual([[0, 10]])
+    expect(upscaleRequest.canvas.fps).toBe(request.canvas.fps)
     expect(fsMocks.rename).toHaveBeenCalledWith(expect.any(String), request.outputPath)
   })
 
   it.each(['turbo', 'base'] as const)('preflights the current portrait Short for %s 4K60 export', async (mode) => {
-    const aiRequest: ExportRequest = {
+    const upscaleRequest: ExportRequest = {
       ...request,
       canvas: { width: 1080, height: 1920, fps: 30.000845094228005, fit: 'cover' },
-      aiEnhance: { mode }
+      upscale: { mode }
     }
-    await exportVideo(aiRequest)
+    await exportVideo(upscaleRequest)
 
-    expect(aiMocks.requireAiPack).toHaveBeenCalledWith({ spatial: true, mode })
-    const context = aiMocks.encodeWithAi.mock.calls[0]?.[7] as AiExportContext | undefined
+    expect(upscaleMocks.requireUpscalePack).toHaveBeenCalledWith({ spatial: true, mode })
+    const context = upscaleMocks.encodeWithUpscale.mock.calls[0]?.[7] as UpscaleExportContext | undefined
     expect(context?.plan).toMatchObject({
       mode, spatial: true, interpolate: true,
       canvas: { width: 2160, height: 3840, fps: 60, fit: 'cover' }
@@ -190,30 +214,30 @@ describe('restricted GPU export authorization', () => {
 
   it('still rejects unsupported spatial aspect ratios before pack setup', async () => {
     await expect(exportVideo({
-      ...request, canvas: { ...request.canvas, width: 1440, height: 1080 }, aiEnhance: {}
+      ...request, canvas: { ...request.canvas, width: 1440, height: 1080 }, upscale: {}
     })).rejects.toThrow('3840×2160 or 2160×3840')
-    expect(aiMocks.requireAiPack).not.toHaveBeenCalled()
+    expect(upscaleMocks.requireUpscalePack).not.toHaveBeenCalled()
     expect(fsMocks.mkdir).not.toHaveBeenCalled()
   })
 
   it('rejects an AI preview range before creating export work', async () => {
-    const aiRequest: ExportRequest = { ...request, aiEnhance: {} }
+    const upscaleRequest: ExportRequest = { ...request, upscale: {} }
 
-    await expect(exportVideo(aiRequest, [0, 1])).rejects.toThrow('AI enhancement applies to the whole export')
+    await expect(exportVideo(upscaleRequest, [0, 1])).rejects.toThrow('Upscaling applies to the whole export')
 
-    expect(aiMocks.requireAiPack).not.toHaveBeenCalled()
-    expect(aiMocks.encodeWithAi).not.toHaveBeenCalled()
+    expect(upscaleMocks.requireUpscalePack).not.toHaveBeenCalled()
+    expect(upscaleMocks.encodeWithUpscale).not.toHaveBeenCalled()
     expect(fsMocks.mkdir).not.toHaveBeenCalled()
   })
 
   it('fails a missing AI pack before creating output directories', async () => {
-    aiMocks.requireAiPack.mockRejectedValue(new Error('AI pack unavailable'))
+    upscaleMocks.requireUpscalePack.mockRejectedValue(new Error('AI pack unavailable'))
 
-    await expect(exportVideo({ ...request, aiEnhance: {} })).rejects.toThrow('AI pack unavailable')
+    await expect(exportVideo({ ...request, upscale: {} })).rejects.toThrow('AI pack unavailable')
 
     expect(fsMocks.mkdir).not.toHaveBeenCalled()
     expect(fsMocks.mkdtemp).not.toHaveBeenCalled()
-    expect(aiMocks.encodeWithAi).not.toHaveBeenCalled()
+    expect(upscaleMocks.encodeWithUpscale).not.toHaveBeenCalled()
   })
 
   it('uses the privileged export entrypoint before probing encoders', async () => {
@@ -265,6 +289,13 @@ describe('restricted GPU export authorization', () => {
     await expect(exportVideo(request)).rejects.toThrow('Job cancelled')
     expect(encoderMocks.softwareEncoder).not.toHaveBeenCalled()
     expect(jobMocks.run).not.toHaveBeenCalled()
+  })
+
+  it('preserves an export failure when temporary cleanup fails', async () => {
+    jobMocks.run.mockRejectedValue(new Error('encoder failed'))
+    fsMocks.rm.mockRejectedValue(new Error('cleanup failed'))
+
+    await expect(exportVideo(request)).rejects.toThrow('encoder failed')
   })
 
   it('keeps the ordinary encoder probe when no restricted node exists', async () => {
@@ -391,6 +422,16 @@ describe('restricted GPU export authorization', () => {
     expect(jobMocks.run).toHaveBeenCalledTimes(2)
     expect(jobMocks.run.mock.calls[1]?.[0]).toBe('/usr/bin/second-ffmpeg')
     expect(fsMocks.rm).toHaveBeenCalledWith(expect.stringMatching(/\.otc\.mp4$/), { force: true })
+  })
+
+  it('continues an encoder fallback when failed-attempt cleanup fails', async () => {
+    const secondEncoder = { ...encoder, executable: '/usr/bin/second-ffmpeg' }
+    encoderMocks.exportEncoders.mockResolvedValue([encoder, secondEncoder])
+    jobMocks.run.mockRejectedValueOnce(new Error('first encoder failed')).mockResolvedValueOnce(undefined)
+    fsMocks.rm.mockRejectedValue(new Error('cleanup failed'))
+
+    await expect(exportVideo(request)).resolves.toBeUndefined()
+    expect(jobMocks.run).toHaveBeenCalledTimes(2)
   })
 
   it('does not retry an ordinary encoder after cancellation', async () => {

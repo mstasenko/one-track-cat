@@ -1,5 +1,6 @@
 import type { AnimationTiming, TextAnimationPreset, TextOverlay } from '../types'
 import { frameAlphaFilter } from './frame-alpha'
+import { stillFrameFilter } from './export-inputs'
 
 interface AnimationExpressions {
   opacity: string
@@ -85,8 +86,9 @@ function addStaticTextFilters(
   const outputLabel = `vout${order}`
   const x = overlay.renderedTextBitmap?.x ?? 0
   const y = overlay.renderedTextBitmap?.y ?? 0
+  const alpha = frameAlphaFilter(`textalpha${order}`, overlay.opacity, '1')
   filters.push(
-    `[${inputIndex}:v:0]trim=duration=${decimal(overlay.duration)},setpts=PTS-STARTPTS+${decimal(overlay.start)}/TB,format=rgba,colorchannelmixer=aa=${overlay.opacity}[ov${order}]`,
+    `[${inputIndex}:v:0]${stillFrameFilter(overlay.duration)},trim=duration=${decimal(overlay.duration)},setpts=PTS-STARTPTS+${decimal(overlay.start)}/TB,format=rgba,${alpha}[ov${order}]`,
     `[${inputLabel}][ov${order}]overlay=x=${x}:y=${y}:eof_action=pass:repeatlast=1:enable='between(t,${decimal(overlay.start)},${decimal(overlay.start + overlay.duration)})'[${outputLabel}]`
   )
   return outputLabel
@@ -108,7 +110,7 @@ function addAnimatedTextFilters(
   const x = `${bitmap.anchorX}-overlay_w/2+(${outputExpression.x})*${canvas.width * overlay.width}`
   const y = `${bitmap.anchorY}-overlay_h/2+(${outputExpression.y})*${canvas.height * overlay.height}`
   filters.push(
-    `[${inputIndex}:v:0]trim=duration=${decimal(overlay.duration)},setpts=PTS-STARTPTS,scale=w='${width}':h='${height}':eval=frame,format=rgba,` +
+    `[${inputIndex}:v:0]${stillFrameFilter(overlay.duration)},trim=duration=${decimal(overlay.duration)},setpts=PTS-STARTPTS,scale=w='${width}':h='${height}':eval=frame,format=rgba,` +
       `${alpha},setpts=PTS-STARTPTS+${decimal(overlay.start)}/TB[ov${order}]`,
     `[${inputLabel}][ov${order}]overlay=x='${x}':y='${y}':eval=frame:eof_action=pass:repeatlast=1:` +
       `enable='between(t,${decimal(overlay.start)},${decimal(overlay.start + overlay.duration)})'[${outputLabel}]`

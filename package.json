@@ -40,6 +40,7 @@
     "test:upscale-recipes": "node scripts/run-tests.mjs python3 scripts/test_prepare_upscale_pack.py && node scripts/run-tests.mjs python3 scripts/test_build_openvino_gpu.py",
     "verify:ci": "npm install && npm audit --audit-level=low && npm test",
     "test:vitest": "node scripts/run-tests.mjs vitest run --coverage && node scripts/run-tests.mjs node scripts/quality.mjs",
+    "test:packs": "otc_CPU_ONLY=1 node scripts/run-tests.mjs vitest run --config vitest.pack.config.ts",
     "test:e2e": "electron-vite build --logLevel error && node scripts/run-tests.mjs node scripts/run-headless-wayland.mjs node_modules/.bin/playwright test",
     "test:e2e:ci-stress": "otc_E2E_SLOW_POINTER=1 npm run test:e2e -- --grep 'Short: preview full source|keeps playback running across an appended source EOF'",
     "test:quality": "node scripts/run-tests.mjs node scripts/quality.mjs",

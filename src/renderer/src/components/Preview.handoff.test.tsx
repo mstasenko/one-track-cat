@@ -29,7 +29,7 @@ function previewProps(session: EditSession, playing: boolean): PreviewProps {
     session, playing, zoom: 1, canUndo: false, canRedo: false,
     onPlayingChange: vi.fn(), onZoom: vi.fn(), onPlayhead: vi.fn(), onSelect: vi.fn(),
     onOverlayChange: vi.fn(), onOverlayGestureStart: vi.fn(), onOverlayGestureEnd: vi.fn(),
-    onOverlayGestureCancel: vi.fn(), onAddMark: vi.fn(), onClearMarks: vi.fn(),
+    onOverlayGestureCancel: vi.fn(), onAddMark: vi.fn(), onClearMark: vi.fn(),
     onRemoveMarked: vi.fn(), onUndo: vi.fn(), onRedo: vi.fn(), onStep: vi.fn(),
     focusPicking: null, onFocusZoom: vi.fn(), onCancelFocusPick: vi.fn(), renderedPreview: null
   }
@@ -419,8 +419,9 @@ describe('Preview late-frame handoff', () => {
       media === fallback && gain === 0 && delay !== undefined && duration === 0.01)
     expect(fade).toBeDefined()
     // The primary reaches the next join first; waiting for the lagging fallback
-    // would let its source be replaced before the fade finishes.
-    expect(fade?.[2]).toBeCloseTo(0.04, 6)
+    // would let its source be replaced before the fade finishes. Finish another
+    // 10 ms early to tolerate the independent media and Web Audio clocks.
+    expect(fade?.[2]).toBeCloseTo(0.03, 6)
   })
 
   it('bridges audio through the incoming transition preloader until the primary is decoded', async () => {
@@ -475,6 +476,7 @@ describe('Preview late-frame handoff', () => {
     Object.defineProperty(primary, 'readyState', { configurable: true, value: 2 })
     Object.defineProperty(primary, 'seeking', { configurable: true, value: false })
     mediaClock(primary, 0.25)
+    mediaClock(incoming, 0.25)
     act(() => { primary.dispatchEvent(new Event('loadeddata')) })
     expect(lastGain(outgoing)).toBe(0)
     expect(lastGain(incoming)).toBe(1)

@@ -201,10 +201,10 @@ describe('export actions', () => {
     if (typeof action !== 'function') throw new Error('export action missing')
     act(() => { (action as () => void)() })
 
-    const path = container?.querySelector('[data-ai-export-path]')
-    const start = container?.querySelector('[data-ai-export-start]')
+    const path = container?.querySelector('[data-upscale-export-path]')
+    const start = container?.querySelector('[data-upscale-export-start]')
     if (!(path instanceof HTMLInputElement) || !(start instanceof HTMLButtonElement)) {
-      throw new Error('AI export destination controls missing')
+      throw new Error('Upscale export destination controls missing')
     }
     act(() => {
       // React tracks the instance setter, so tests must call the native setter.
@@ -238,8 +238,8 @@ describe('export actions', () => {
 
     saveCurrentSessionMock.mockResolvedValueOnce(session)
     act(() => { onExport() })
-    const start = container?.querySelector('[data-ai-export-start]')
-    if (!(start instanceof HTMLButtonElement)) throw new Error('AI export start button missing')
+    const start = container?.querySelector('[data-upscale-export-start]')
+    if (!(start instanceof HTMLButtonElement)) throw new Error('Upscale export start button missing')
     await act(async () => {
       start.click()
       await Promise.resolve()
@@ -247,13 +247,13 @@ describe('export actions', () => {
     })
     expect(window.otc.chooseExportPath).toHaveBeenCalledWith('source-edited.mp4')
     expect(window.otc.exportVideo).toHaveBeenCalledWith(expect.objectContaining({ outputPath: '/exported.mp4' }))
-    expect(vi.mocked(window.otc.exportVideo).mock.calls[0]?.[0]).not.toHaveProperty('aiEnhance')
+    expect(vi.mocked(window.otc.exportVideo).mock.calls[0]?.[0]).not.toHaveProperty('upscale')
 
     vi.mocked(window.otc.chooseExportPath).mockRejectedValueOnce(new Error('cancelled by user'))
     await act(async () => {
       onExport()
-      const dialogStart = container?.querySelector('[data-ai-export-start]')
-      if (!(dialogStart instanceof HTMLButtonElement)) throw new Error('AI export start button missing')
+      const dialogStart = container?.querySelector('[data-upscale-export-start]')
+      if (!(dialogStart instanceof HTMLButtonElement)) throw new Error('Upscale export start button missing')
       dialogStart.click()
       await Promise.resolve()
     })
@@ -262,8 +262,8 @@ describe('export actions', () => {
     vi.mocked(window.otc.chooseExportPath).mockRejectedValueOnce(new Error('disk unavailable'))
     await act(async () => {
       onExport()
-      const dialogStart = container?.querySelector('[data-ai-export-start]')
-      if (!(dialogStart instanceof HTMLButtonElement)) throw new Error('AI export start button missing')
+      const dialogStart = container?.querySelector('[data-upscale-export-start]')
+      if (!(dialogStart instanceof HTMLButtonElement)) throw new Error('Upscale export start button missing')
       dialogStart.click()
       await Promise.resolve()
     })

@@ -12,7 +12,8 @@ vi.mock('node:fs/promises', async (importOriginal) => {
   return { ...replacement, default: replacement }
 })
 
-import { buildFaceWorkerCommand, nativeFaceWorkerCommand, restrictedIntelRenderNode } from './face-worker'
+import { buildFaceWorkerCommand, nativeFaceWorkerCommand } from './face-worker'
+import { restrictedIntelRenderNode } from './intel-device'
 
 const pack = {
   executable: '/host/face-pack/otc-face-blur',

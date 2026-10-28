@@ -5,7 +5,7 @@ import { timelineDuration } from '../segment-time'
 
 export function estimatedExportBytes(request: ExportRequest): number {
   const duration = timelineDuration(request.segments)
-  const conservativeBitsPerSecond = request.aiEnhance ? 100_000_000 : 50_000_000
+  const conservativeBitsPerSecond = request.upscale ? 100_000_000 : 50_000_000
   const fixedReserve = 256 * 1024 ** 2
   return Math.ceil(fixedReserve + duration * conservativeBitsPerSecond / 8 * 1.5)
 }

@@ -5,6 +5,7 @@ import { BrowserWindow } from 'electron'
 import type { Readable } from 'node:stream'
 import type { HardwareLabel, JobKind, JobPhase, JobProgress } from '../types'
 import { estimateEtaSeconds, ffmpegProgress } from './progress'
+import { ffmpegEnvironment } from './ffmpeg-environment'
 
 interface ActiveJob {
   child: ChildProcessByStdio<null, Readable, Readable>
@@ -124,7 +125,7 @@ export class JobManager {
     }
 
     const pending = new Promise<void>((resolve, reject) => {
-      const child = spawn(executable, args, { stdio: ['ignore', 'pipe', 'pipe'] })
+      const child = spawn(executable, args, { stdio: ['ignore', 'pipe', 'pipe'], env: ffmpegEnvironment(executable) })
       const job: ActiveJob = { child, cancelled: false }
       this.active.set(id, job)
       let stderr = ''

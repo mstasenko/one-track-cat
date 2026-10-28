@@ -156,7 +156,8 @@ export function insertReplay(session: EditSession, start: number, end: number): 
     segments,
     // Existing layers spanning the insertion stay active; only face coverage
     // is additionally copied from the selected footage into the replay.
-    overlays: timedRangesAfterInsertion(session.overlays, insertionPoint, insertedDuration),
+    overlays: [...timedRangesAfterInsertion(session.overlays.filter((overlay) => overlay.type !== 'audio' || !overlay.narration), insertionPoint, insertedDuration),
+      ...rippled.overlays.filter((overlay) => overlay.type === 'audio' && overlay.narration)],
     ...(faceBlurs === undefined ? {} : { faceBlurs }),
     marks,
     playhead: insertionPoint + Math.min(firstFrame, insertedDuration / 2)

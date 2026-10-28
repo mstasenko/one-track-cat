@@ -43,6 +43,27 @@ function legacySession(): EditSession {
 }
 
 describe('legacy transition handles', () => {
+  it('restores cut dissolves in preview and saved history without moving edits', async () => {
+    const session = createSession(source)
+    const sourceId = session.sources[0]?.id ?? 'source'
+    session.segments = [
+      { id: 'left', sourceId, sourceStart: 0, sourceEnd: 3 },
+      { id: 'right', sourceId, sourceStart: 5, sourceEnd: 10 }
+    ]
+    Object.defineProperty(window, 'otc', { configurable: true, value: { getPathUrl: vi.fn((path: string) => Promise.resolve(path)) } })
+    const restored = await restoredEditorState(savedSession(session, [session], [session]))
+    for (const item of [restored.session, ...restored.history, ...restored.future]) {
+      expect(timelineDuration(item.segments)).toBe(8)
+      expect(video(item.segments[1]).transition).toEqual({ effect: 'fade', duration: 0.5 })
+      expect(transitionPreviewAtOutputTime(item, 0)).toBeNull()
+      expect(transitionPreviewAtOutputTime(item, 7.9)).toBeNull()
+      const preview = transitionPreviewAtOutputTime(item, 3.25)
+      expect(preview?.previousSourceTime).toBe(3.25)
+      expect(preview?.currentSourceTime).toBe(5.25)
+      expect(preview?.styles.current.opacity).toBe(0.5)
+    }
+  })
+
   it('repairs saved current, undo, and redo snapshots on reopening', async () => {
     const session = legacySession()
     vi.stubGlobal('otc', undefined)

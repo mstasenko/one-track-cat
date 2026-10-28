@@ -1,3 +1,4 @@
+import { isNarrationSubtitle, narrationSubtitleVisible } from '../model/narration-subtitles'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { EditSession, Overlay, ProjectCanvas } from '@shared/types'
 import { overlayFit } from '@shared/overlay-fit'
@@ -24,6 +25,7 @@ import { useMediaUrl } from './useMediaUrl'
 import { overlayAnimationStyle } from './overlay-animation'
 import { videoRangeStyleAtTime } from '../model/video-range-transition'
 import { isShortCanvas, shortFramePositionAtTime } from '@shared/short-frame'
+import { FocusZoomCircle } from './FocusZoomCircle'
 
 interface TimelineProps {
   session: EditSession
@@ -85,6 +87,21 @@ function AudioTimelineFeedback({ overlay }: { overlay: Overlay }): React.JSX.Ele
 
 function percentage(value: number, duration: number): number {
   return duration > 0 ? value / duration * 100 : 0
+}
+
+function handleTimelineWheel(event: WheelEvent, target: HTMLDivElement, zoom: number, onZoom: (zoom: number) => void): void {
+  if (event.ctrlKey || event.metaKey) {
+    if (event.deltaY === 0) return
+    event.preventDefault()
+    onZoom(clamp(zoom + (event.deltaY < 0 ? 0.25 : -0.25), 1, 8))
+    return
+  }
+  if (zoom <= 1) return
+  const delta = event.deltaX || event.deltaY
+  if (delta === 0) return
+  event.preventDefault()
+  const maximum = Math.max(0, target.scrollWidth - target.clientWidth)
+  target.scrollLeft = Math.max(0, Math.min(maximum, target.scrollLeft + delta))
 }
 
 interface HoverPreview {
@@ -209,7 +226,7 @@ function TimelineHoverFrame({ session, preview }: { session: EditSession; previe
   const previewVideo = useRef<HTMLVideoElement>(null)
   const transitionPreview = transitionPreviewAtOutputTime(session, preview.outputTime)
   const overlays = session.overlays
-    .filter((overlay): overlay is Exclude<Overlay, { type: 'audio' }> => overlay.type !== 'audio' && overlayAtTime(overlay, preview.outputTime))
+    .filter((overlay): overlay is Exclude<Overlay, { type: 'audio' }> => overlay.type !== 'audio' && overlayAtTime(overlay, preview.outputTime) && narrationSubtitleVisible(overlay, session.overlays))
     .sort((left, right) => left.zIndex - right.zIndex)
   const focusTransform = focusCameraTransformAtTime(session.focusZooms, preview.outputTime)
   const rangeStyle = videoRangeStyleAtTime(session.videoTransitions ?? [], preview.outputTime)
@@ -237,6 +254,7 @@ function TimelineHoverFrame({ session, preview }: { session: EditSession; previe
           data-transition={transitionPreview?.active.effect}
         />
       </div>
+      <FocusZoomCircle effects={session.focusZooms} outputTime={preview.outputTime} canvas={session.canvas} />
       {overlays.map((overlay) => <TimelineOverlay key={overlay.id} canvas={session.canvas} overlay={overlay} outputTime={preview.outputTime} frameHeight={preview.frameHeight} />)}
     </div>
   )
@@ -296,6 +314,15 @@ export function Timeline({
   const replays = replayRanges(session.segments)
   const shortPosition = shortFramePositionAtTime(session.shortFramePoints ?? [], session.playhead, session.canvas.shortFramePosition)
   const [hoverPreview, setHoverPreview] = useState<HoverPreview | null>(null)
+  const timelineScrollRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const target = timelineScrollRef.current
+    if (!target) return
+    const onWheel = (event: WheelEvent): void => handleTimelineWheel(event, target, zoom, onZoom)
+    target.addEventListener('wheel', onWheel, { passive: false })
+    return () => target.removeEventListener('wheel', onWheel)
+  }, [onZoom, zoom])
 
   const pointerToTime = (event: React.PointerEvent<HTMLDivElement>): number => {
     const rectangle = event.currentTarget.getBoundingClientRect()
@@ -332,11 +359,9 @@ export function Timeline({
         <button aria-label="Move frame right" title="Set frame 5% right at the playhead" disabled={shortPosition >= 1} onClick={() => onNudgeFrame?.('right')}>Right →</button>
       </div>}
       <div
+        ref={timelineScrollRef}
         className="timeline-scroll"
-        onWheel={(event) => {
-          event.preventDefault()
-          onZoom(clamp(zoom + (event.deltaY < 0 ? 0.25 : -0.25), 1, 8))
-        }}
+        title="Scroll to move; Ctrl/Cmd+scroll to zoom"
       >
         <div
           className="timeline"
@@ -347,7 +372,7 @@ export function Timeline({
         >
           <div className="video-track">
             {session.segments.map((segment) => <TimelineVideoSegment key={segment.id} session={session} segment={segment} duration={duration} zoom={zoom} />)}
-            {session.focusZooms.map((effect) => <div key={effect.id} className="focus-zoom-range" style={{ left: `${percentage(effect.start, duration)}%`, width: `${percentage(effect.duration, duration)}%` }}><span>{effect.zoom}×</span></div>)}
+            {session.focusZooms.map((effect) => <div key={effect.id} className="focus-zoom-range" style={{ left: `${percentage(effect.start, duration)}%`, width: `${percentage(effect.duration, duration)}%` }}><span>{effect.mode === 'circle' ? `Circle ${effect.zoom}×` : `${effect.zoom}×`}</span></div>)}
             {(session.videoTransitions ?? []).map((effect) => <div key={effect.id} className="video-transition-range" style={{ left: `${percentage(effect.start, duration)}%`, width: `${percentage(effect.duration, duration)}%` }}><span>Transition</span></div>)}
             {isShortCanvas(session.canvas) && (session.shortFramePoints ?? []).map((point) => <button
               key={point.id}
@@ -376,7 +401,7 @@ export function Timeline({
             {replays.map((replay) => <div key={`${replay.groupId}-${replay.start}`} className="replay-range" style={{ left: `${percentage(replay.start, duration)}%`, width: `${percentage(replay.duration, duration)}%` }}><span>Replay</span></div>)}
           </div>
           <div className="overlay-track">
-            {session.overlays.map((overlay) => (
+            {session.overlays.filter((overlay) => !isNarrationSubtitle(overlay)).map((overlay) => (
               <button
                 key={overlay.id}
                 className={`timeline-overlay ${session.selectedOverlayId === overlay.id ? 'selected' : ''}`}
@@ -388,6 +413,8 @@ export function Timeline({
                 onPointerDown={(event) => {
                   event.stopPropagation()
                   onSelectOverlay(overlay.id)
+                  // Re-voice is anchored to the recognized recording, not a movable sound clip.
+                  if (overlay.type === 'audio' && overlay.narration) return
                   const startX = event.clientX
                   const originalStart = overlay.start
                   const track = event.currentTarget.parentElement?.parentElement

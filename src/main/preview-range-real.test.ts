@@ -12,14 +12,14 @@ vi.mock('./binaries', () => ({
   ffprobePath: () => join(process.cwd(), 'node_modules', 'ffprobe-static', 'bin', 'linux', 'x64', 'ffprobe')
 }))
 vi.mock('./jobs', () => ({ jobs: { run: vi.fn() } }))
-vi.mock('./face-worker', () => ({ restrictedIntelRenderNode: vi.fn().mockResolvedValue(undefined) }))
+vi.mock('./intel-device', () => ({ restrictedIntelRenderNode: vi.fn().mockResolvedValue(undefined) }))
 vi.mock('./privileged-export', () => ({ encodeWithPrivilegedGpu: vi.fn() }))
 vi.mock('./face-export', () => ({ encodeWithFaces: vi.fn() }))
 vi.mock('./face-preview-cache', () => ({ tryReuseFacePreview: vi.fn().mockResolvedValue(false) }))
 
 import { buildFilterGraph, prepareTimelineInputs } from './exporter'
 import { previewFilterGraph, validatedPreviewRange, type PreviewRange } from './preview-range'
-import { createSession } from '../renderer/src/model/timeline'
+import { createSession, removeOutputRange } from '../renderer/src/model/timeline'
 import { insertSourceAtOutputTime } from '../renderer/src/model/segment-ranges'
 
 const ffmpeg = join(process.cwd(), 'node_modules', 'ffmpeg-static', 'ffmpeg')
@@ -189,6 +189,37 @@ describe('CPU selected-preview composition', () => {
       const weight = progress * progress * (3 - 2 * progress)
       const meanError = frame.reduce((sum, value, byte) => sum + Math.abs(value - (movingSource[byte] ?? 0) * weight), 0) / frame.length
       expect(meanError).toBeLessThan(3)
+    }
+  })
+
+  it('renders a smooth cut dissolve with moving frames and unchanged duration', () => {
+    const project = request()
+    const source = project.sources[0]
+    if (!source) throw new Error('missing source')
+    const grayscale = join(directory, 'cut-motion.mkv')
+    runFfmpeg(['-i', sourcePath, '-vf', 'hue=s=0', '-c:v', 'ffv1', '-threads', '1', '-c:a', 'copy', grayscale])
+    source.metadata = { ...source.metadata, path: grayscale }
+    project.segments = [{ id: 'whole', sourceId: source.id, sourceStart: 0, sourceEnd: 4 }]
+    project.overlays = []
+    project.videoTransitions = []
+    const reference = frames(rawOutputs(project, undefined, 'cut-reference').video)
+    project.segments = removeOutputRange(project.segments, [], 1, 2).segments
+    const output = rawOutputs(project, undefined, 'cut-dissolve')
+    const result = frames(output.video)
+    expect(result).toHaveLength(3 * fps)
+    expect(Math.abs(output.audio.length / (audioRate * audioSampleBytes) - 3)).toBeLessThan(0.02)
+    expect(result[0]).toEqual(reference[0])
+    expect(result.at(-1)).toEqual(reference.at(-1))
+    for (const index of [33, 36, 39, 42]) {
+      const progress = (index / fps - 1) / 0.5
+      const alpha = progress * progress * (3 - 2 * progress)
+      const frame = result[index]
+      const outgoing = reference[index]
+      const incoming = reference[index + fps]
+      if (!frame || !outgoing || !incoming) throw new Error('missing cut frame')
+      const error = frame.reduce((sum, value, byte) => sum + Math.abs(value -
+        ((outgoing[byte] ?? 0) * (1 - alpha) + (incoming[byte] ?? 0) * alpha)), 0) / frame.length
+      expect(error).toBeLessThan(3)
     }
   })
 

@@ -61,7 +61,12 @@ export function applySpeedToOutputRange(session: EditSession, rawStart: number, 
     }
     return mapped
   }
-  const overlays = session.overlays.map((overlay) => ({ ...overlay, start: map(overlay.start) }))
+  // Regenerated speech is timestamp-anchored. A new speed must expose the
+  // original audio again, not keep muting it with an out-of-sync replacement.
+  const overlays = session.overlays.map((overlay) => ({ ...overlay, start: map(overlay.start),
+    ...(overlay.type === 'audio' && overlay.narration && overlay.start < end && overlay.start + overlay.duration > start
+      ? { duration: Math.max(EPSILON, map(overlay.start + overlay.duration) - map(overlay.start)),
+        narration: { ...overlay.narration, enabled: false, invalidated: true } } : {}) }))
   const marks = [...new Set(session.marks.map(map))].filter((mark) => mark > EPSILON && mark < finalDuration - EPSILON)
   const focusZooms = session.focusZooms.map((effect) => {
     const mappedStart = map(effect.start)

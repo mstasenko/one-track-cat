@@ -1,5 +1,7 @@
 import type { CSSProperties } from 'react'
+import { smoothstep } from '@shared/focus-zoom'
 import type { EditSession, SourceSegment, TransitionEffect, VideoTransition } from '@shared/types'
+import { spinTransform } from '@shared/spin-transition'
 import { clamp, isFreezeSegment, positionAtOutputTime, sourceForSegment } from './timeline'
 import { videoRangeStyleAtTime } from './video-range-transition'
 
@@ -43,13 +45,21 @@ export function transitionAtOutputTime(
   }
 }
 
-function currentStyle(effect: TransitionEffect, progress: number): CSSProperties {
+function spinStyle(progress: number, incoming: boolean, aspectRatio: number): CSSProperties {
+  const transform = spinTransform(progress, incoming, aspectRatio)
+  return {
+    ...(incoming ? { opacity: smoothstep(progress) } : {}),
+    transform: `rotate(${transform.angle * 180 / Math.PI}deg) scale(${transform.scale})`
+  }
+}
+
+function currentStyle(effect: TransitionEffect, progress: number, aspectRatio: number): CSSProperties {
   const remaining = 1 - progress
   switch (effect) {
     case 'fade':
       return { opacity: progress * progress * (3 - 2 * progress) }
     case 'dissolve':
-      return { opacity: progress, filter: `blur(${remaining * 5}px)` }
+      return { opacity: progress, filter: `blur(${10 * progress * remaining}px)` }
     case 'wipeleft':
       return { clipPath: `inset(0 ${remaining * 100}% 0 0)` }
     case 'wiperight':
@@ -64,31 +74,35 @@ function currentStyle(effect: TransitionEffect, progress: number): CSSProperties
       return { opacity: progress, transform: `scale(${0.72 + progress * 0.28})` }
     case 'hblur':
       return { opacity: progress, filter: `blur(${remaining * 18}px)` }
+    case 'spin': return spinStyle(progress, true, aspectRatio)
   }
 }
 
-function previousStyle(effect: TransitionEffect, progress: number): CSSProperties {
+function previousStyle(effect: TransitionEffect, progress: number, aspectRatio: number): CSSProperties {
   switch (effect) {
     case 'slideleft':
       return { transform: `translateX(${-progress * 28}%)` }
     case 'slideright':
       return { transform: `translateX(${progress * 28}%)` }
     case 'dissolve':
-      return { filter: `blur(${progress * 5}px)`, opacity: 1 - progress * 0.25 }
+      return { filter: `blur(${10 * progress * (1 - progress)}px)` }
     case 'zoomin':
       return { filter: `brightness(${1 - progress * 0.3})`, transform: `scale(${1 + progress * 0.08})` }
     case 'hblur':
       return { filter: `blur(${progress * 12}px)` }
+    case 'spin': return spinStyle(progress, false, aspectRatio)
     default:
       return {}
   }
 }
 
-export function transitionStyles(transition: Pick<ActiveTransition, 'effect' | 'progress'>): TransitionStyles {
+export function transitionStyles(transition: Pick<ActiveTransition, 'effect' | 'progress'>,
+  canvas?: Pick<EditSession['canvas'], 'width' | 'height'>): TransitionStyles {
   const progress = clamp(transition.progress, 0, 1)
+  const aspectRatio = canvas && canvas.height > 0 ? canvas.width / canvas.height : 16 / 9
   return {
-    current: currentStyle(transition.effect, progress),
-    previous: previousStyle(transition.effect, progress)
+    current: currentStyle(transition.effect, progress, aspectRatio),
+    previous: previousStyle(transition.effect, progress, aspectRatio)
   }
 }
 
@@ -104,7 +118,7 @@ export function transitionPreviewAtOutputTime(
   const previousSource = sourceForSegment(session, previous)
   const currentSource = sourceForSegment(session, position.segment)
   if (!previousSource || !currentSource) return null
-  const styles = transitionStyles(active)
+  const styles = transitionStyles(active, session.canvas)
   const rangeStyle = videoRangeStyleAtTime(session.videoTransitions ?? [], outputTime)
   const merge = (style: CSSProperties): CSSProperties => ({
     ...rangeStyle,

@@ -13,8 +13,9 @@ import type {
 import { categoryFor, scanAssets } from './assets'
 import { registerFileDialogs } from './file-dialogs'
 import { exportVideo } from './exporter'
-import { jobs } from './jobs'
+import { hasActiveJobs, jobs } from './jobs'
 import {
+  clearProxyCache,
   createProxy,
   probeAsset,
   probeMedia,
@@ -28,7 +29,7 @@ import { SessionPathRegistry } from './path-registry'
 import { svgDataUrl } from './svg'
 import {
   parseExportRequest,
-  parseAiEnhancementMode,
+  parseUpscaleMode,
   parseJobId,
   parseMediaMetadata,
   parsePath,
@@ -36,18 +37,20 @@ import {
 } from './validation'
 import { referencedExportSources } from '../export-sources'
 import { facePackStatus } from './face-pack'
-import { previewFaces, restoreFaces } from './face-preview'
+import { isFacePreviewRendering, previewFaces, restoreFaces } from './face-preview'
 import {
-  aiPackStatus,
-  cancelAiModelDownload,
-  shutdownAiModelDownload,
-  startAiModelDownload,
-  subscribeAiModelDownload
-} from './ai-pack'
+  upscalePackStatus,
+  cancelUpscaleModelDownload,
+  shutdownUpscaleModelDownload,
+  startUpscaleModelDownload,
+  subscribeUpscaleModelDownload
+} from './upscale-pack'
 import { clearFaceCache } from './face-cache-cleanup'
-import { cancelFaceExport, shutdownFaceExports } from './face-process'
+import { cancelFaceExport, hasActiveFaceExports, shutdownFaceExports } from './face-process'
 import { initialVideoDirectory, listVideoDirectory } from './video-picker'
-import { importTemplate, searchTemplates, templatePage } from './online-templates'
+import { clearOnlineTemplateCache, importTemplate, searchTemplates, templatePage } from './online-templates'
+import { clearNarrationCache, registerNarrationIpc, shutdownNarration } from './narration-ipc'
+import { configureIntelUiGpu } from './ui-gpu'
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -56,9 +59,12 @@ protocol.registerSchemesAsPrivileged([
   }
 ])
 
+const uiGpuPolicy = configureIntelUiGpu()
+Object.assign(process.env, uiGpuPolicy.environment)
 app.setName('OneTrackCat')
-if (process.env.otc_CPU_ONLY === '1') app.disableHardwareAcceleration()
+if (uiGpuPolicy.disableHardwareAcceleration || process.env.otc_CPU_ONLY === '1') app.disableHardwareAcceleration()
 app.setDesktopName('OneTrackCat.desktop')
+if (uiGpuPolicy.renderNode) app.commandLine.appendSwitch('render-node-override', uiGpuPolicy.renderNode)
 app.commandLine.appendSwitch('ozone-platform', 'wayland')
 app.commandLine.appendSwitch('enable-features', 'AcceleratedVideoDecodeLinuxZeroCopyGL')
 const headlessTest = !app.isPackaged && process.env.otc_HEADLESS_TEST === '1'
@@ -339,6 +345,7 @@ function registerIpc(
   requestedPath?: string
 ): void {
   registerFileDialogs(directories, paths, { video: testVideoPath, media: testMediaPath, output: testOutputPath })
+  registerNarrationIpc(paths, trustedExport)
   ipcMain.handle('video:list', async (_event, value: unknown) => {
     const directory = value === undefined ? directories.open : parsePath(value)
     const result = await listVideoDirectory(directory)
@@ -384,21 +391,26 @@ function registerIpc(
   ipcMain.handle('templates:open-page', (_event, source: unknown, id: unknown) =>
     shell.openExternal(templatePage(source, id)))
   ipcMain.handle('faces:pack-status', facePackStatus)
-  ipcMain.handle('ai:pack-status', (_event, spatial: unknown, mode: unknown) => {
+  ipcMain.handle('upscale:pack-status', (_event, spatial: unknown, mode: unknown) => {
     if (spatial !== undefined && typeof spatial !== 'boolean') throw new Error('Invalid AI spatial requirement')
-    return aiPackStatus({ spatial, mode: parseAiEnhancementMode(mode) })
+    return upscalePackStatus({ spatial, mode: parseUpscaleMode(mode) })
   })
-  ipcMain.handle('ai:model-download:start', (_event, mode: unknown) =>
-    startAiModelDownload({ mode: parseAiEnhancementMode(mode) }))
-  ipcMain.handle('ai:model-download:cancel', () => cancelAiModelDownload())
+  ipcMain.handle('upscale:model-download:start', (_event, mode: unknown) =>
+    startUpscaleModelDownload({ mode: parseUpscaleMode(mode) }))
+  ipcMain.handle('upscale:model-download:cancel', () => cancelUpscaleModelDownload())
   ipcMain.handle('faces:preview', (_event, value: unknown) => previewFaces(value, paths, trustedExport))
   ipcMain.handle('faces:restore', (_event, value: unknown) => restoreFaces(value, paths, trustedExport))
-  ipcMain.handle('face-cache:clear', () => clearFaceCache())
+  const clearProjectCaches = async (): Promise<void> => {
+    // A running export may still read downloaded media from the previous project.
+    if (hasActiveJobs() || hasActiveFaceExports() || isFacePreviewRendering()) return
+    await Promise.all([clearFaceCache(), clearNarrationCache(), clearProxyCache(), clearOnlineTemplateCache(app.getPath('userData'))])
+  }
+  ipcMain.handle('face-cache:clear', clearProjectCaches)
   ipcMain.handle('session:load', () => requestedPath ? null : loadSession(paths))
   ipcMain.handle('session:save', (_event, value: unknown) => saveSession(value, paths))
   ipcMain.handle('session:reset', async () => {
     await resetSessionFile(statePath())
-    await clearFaceCache()
+    await clearProjectCaches()
   })
   ipcMain.handle('export:start', async (_event, value: unknown) => {
     try {
@@ -443,9 +455,9 @@ async function startApplication(): Promise<void> {
     export: videos,
     media: downloads
   }, paths, requestedPath)
-  const removeModelDownloadProgress = subscribeAiModelDownload((progress) => {
+  const removeModelDownloadProgress = subscribeUpscaleModelDownload((progress) => {
     for (const window of BrowserWindow.getAllWindows()) {
-      if (!window.isDestroyed()) window.webContents.send('ai:model-download:progress', progress)
+      if (!window.isDestroyed()) window.webContents.send('upscale:model-download:progress', progress)
     }
   })
   app.once('will-quit', removeModelDownloadProgress)
@@ -471,7 +483,7 @@ app.on('before-quit', (event) => {
   event.preventDefault()
   if (shutdownStarted) return
   shutdownStarted = true
-  void Promise.all([shutdownProxyJobs(), jobs.shutdown(), shutdownFaceExports(), shutdownAiModelDownload()]).then(
+  void Promise.all([shutdownProxyJobs(), jobs.shutdown(), shutdownFaceExports(), shutdownUpscaleModelDownload(), shutdownNarration()]).then(
     () => {
       shutdownComplete = true
       app.quit()

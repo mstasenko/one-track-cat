@@ -5,6 +5,7 @@ import {
   createSession,
   marksAfterRemoval,
   deletionRange,
+  markAtBoundary,
   defaultTextOverlay,
   formatTime,
   isSourceTimedOverlay,
@@ -16,7 +17,8 @@ import {
   segmentPlaybackRate,
   segmentSourceDuration,
   segmentOutputDuration,
-  timelineDuration
+  timelineDuration,
+  withCutTransitions
 } from './timeline'
 import { insertSourceAtOutputTime } from './segment-ranges'
 import { applySpeedToOutputRange } from './speed'
@@ -242,6 +244,26 @@ describe('timeline model', () => {
     expect(marksAfterRemoval([4, 12, 16], 12, 16, 16)).toEqual([4, 12])
   })
 
+  it('identifies only actual marks at the highlighted boundaries', () => {
+    const session = createSession(source)
+    session.marks = [4, 12]
+    session.playhead = 8
+    expect(markAtBoundary(session, 'left')).toBe(4)
+    expect(markAtBoundary(session, 'right')).toBe(12)
+    session.playhead = 4
+    expect(markAtBoundary(session, 'left')).toBeUndefined()
+    expect(markAtBoundary(session, 'right')).toBe(4)
+    session.playhead = 2
+    expect(markAtBoundary(session, 'left')).toBeUndefined()
+    expect(markAtBoundary(session, 'right')).toBe(4)
+    session.playhead = 18
+    expect(markAtBoundary(session, 'left')).toBe(12)
+    expect(markAtBoundary(session, 'right')).toBeUndefined()
+    session.marks = []
+    expect(markAtBoundary(session, 'left')).toBeUndefined()
+    expect(markAtBoundary(session, 'right')).toBeUndefined()
+  })
+
   it('removes a range spanning segments and collapses output time', () => {
     const segments: SourceSegment[] = [
       { id: 'a', sourceId: 'source', sourceStart: 0, sourceEnd: 5, transition: { effect: 'fade', duration: 1 } },
@@ -249,7 +271,8 @@ describe('timeline model', () => {
     ]
     const result = removeOutputRange(segments, [], 3, 7)
     expect(result.segments.map((segment) => [video(segment).sourceStart, video(segment).sourceEnd])).toEqual([[0, 3], [12, 15]])
-    expect(result.segments.every((segment) => video(segment).transition === undefined)).toBe(true)
+    expect(video(result.segments[0]).transition).toBeUndefined()
+    expect(video(result.segments[1]).transition).toEqual({ effect: 'fade', duration: 0.5 })
     expect(timelineDuration(result.segments)).toBe(6)
   })
 
@@ -373,5 +396,52 @@ describe('timeline model', () => {
     expect(isSourceTimedOverlay(overlay)).toBe(false)
     expect(overlaySourceTime(audio, 3)).toBe(5)
     expect(overlaySourceTime(gif, 4)).toBe(1)
+  })
+})
+
+describe('cut dissolves', () => {
+  const segments: SourceSegment[] = [
+    { id: 'before', sourceId: 'source', sourceStart: 0, sourceEnd: 4 },
+    { id: 'after', sourceId: 'source', sourceStart: 6, sourceEnd: 10 }
+  ]
+
+  it('softens an internal removal without shifting the timeline', () => {
+    const result = removeOutputRange([{ id: 'whole', sourceId: 'source', sourceStart: 0, sourceEnd: 10 }], [], 4, 6)
+    expect(video(result.segments[0]).transition).toBeUndefined()
+    expect(video(result.segments[1]).transition).toEqual({ effect: 'fade', duration: 0.5 })
+    expect(timelineDuration(result.segments)).toBe(8)
+    expect(withCutTransitions(result.segments)).toBe(result.segments)
+  })
+
+  it('leaves head and tail trims without fades', () => {
+    const whole: SourceSegment[] = [{ id: 'whole', sourceId: 'source', sourceStart: 0, sourceEnd: 10 }]
+    for (const [start, end] of [[0, 2], [8, 10]] as const) {
+      const result = removeOutputRange(whole, [], start, end)
+      expect(result.segments).toHaveLength(1)
+      expect(video(result.segments[0]).transition).toBeUndefined()
+    }
+  })
+
+  it('fits short cuts and clips', () => {
+    const tiny = withCutTransitions([
+      { ...video(segments[0]), sourceEnd: 0.2 },
+      { ...video(segments[1]), sourceStart: 0.3, sourceEnd: 0.4 }
+    ])
+    expect(video(tiny[1]).transition?.duration).toBeCloseTo(0.1)
+    expect(withCutTransitions([
+      video(segments[0]), { ...video(segments[1]), sourceStart: 4.01 }
+    ])[1]).toEqual({ ...video(segments[1]), sourceStart: 4.01 })
+  })
+
+  it('preserves explicit effects, inserts, contiguous footage, and replays', () => {
+    for (const after of [
+      { ...video(segments[1]), transition: { effect: 'wipeleft' as const, duration: 1 } },
+      { ...video(segments[1]), sourceId: 'inserted' },
+      { ...video(segments[1]), sourceStart: 4 },
+      { ...video(segments[1]), sourceStart: 0 }
+    ]) {
+      const unchanged = [video(segments[0]), after]
+      expect(withCutTransitions(unchanged)).toBe(unchanged)
+    }
   })
 })

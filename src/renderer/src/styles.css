@@ -88,7 +88,8 @@ input:focus, select:focus, textarea:focus {
 }
 input:focus-visible, select:focus-visible, textarea:focus-visible {
   outline: 2px solid var(--accent);
-  outline-offset: 2px;
+  /* Keep the whole focus ring inside controls at a clipped panel edge. */
+  outline-offset: -2px;
 }
 input:disabled, select:disabled, textarea:disabled {
   border-color: #2e333b;
@@ -277,12 +278,12 @@ progress::-moz-progress-bar { border-radius: inherit; background: var(--accent);
 .confirmation-dialog-actions button { min-width: 86px; }
 .confirmation-dialog-destructive { background: var(--accent); border-color: var(--accent); color: #101608; font-weight: 800; }
 .confirmation-dialog-destructive:hover:not(:disabled) { background: var(--accent-bright); border-color: var(--text); }
-.ai-export-path-label { display: block; margin-top: 16px; color: var(--text-muted); }
-.ai-export-path-row { display: flex; gap: 8px; margin: 6px 0 14px; }
-.ai-export-path-row input { min-width: 0; flex: 1; }
-.ai-export-path-error { margin: -6px 0 12px !important; color: #ffb6a9 !important; }
-.ai-export-progress-track { margin-top: 10px; }
-.ai-export-download-status { margin-top: 10px; margin-bottom: 0; }
+.upscale-export-path-label { display: block; margin-top: 16px; color: var(--text-muted); }
+.upscale-export-path-row { display: flex; gap: 8px; margin: 6px 0 14px; }
+.upscale-export-path-row input { min-width: 0; flex: 1; }
+.upscale-export-path-error { margin: -6px 0 12px !important; color: #ffb6a9 !important; }
+.upscale-export-progress-track { margin-top: 10px; }
+.upscale-export-download-status { margin-top: 10px; margin-bottom: 0; }
 
 .welcome { flex: 1; margin: 60px; display: grid; place-content: center; text-align: center; }
 .welcome h1 { margin: 14px 0 4px; }
@@ -371,6 +372,10 @@ progress::-moz-progress-bar { border-radius: inherit; background: var(--accent);
   .transport { gap: 2px; }
   .transport button { padding-inline: 4px; white-space: nowrap; }
   .transport .play-button { min-width: 70px; padding-inline: 8px; }
+  .transport .transport-clear-mark { min-width: 28px; width: 28px; padding-inline: 0; font-size: 0; }
+  .transport .transport-clear-mark::before { font-size: 13px; }
+  .transport .transport-clear-left::before { content: '×←'; }
+  .transport .transport-clear-right::before { content: '×→'; }
   .transport .timeline-time { white-space: nowrap; }
 }
 .visual-overlay { position: absolute; cursor: move; touch-action: none; }
@@ -380,11 +385,11 @@ progress::-moz-progress-bar { border-radius: inherit; background: var(--accent);
 .preview-text { width: 100%; height: 100%; white-space: pre-wrap; overflow: visible; line-height: 1.05; pointer-events: none; }
 .resize-handle { position: absolute; width: 13px; height: 13px; min-width: 0; padding: 0; right: -7px; bottom: -7px; border: 2px solid #102018; border-radius: 50%; background: var(--accent); cursor: nwse-resize; }
 
-.timeline-shell { min-height: 0; border-top: 1px solid #292c33; background: #141519; display: flex; flex-direction: column; }
+.timeline-shell { min-width: 0; min-height: 0; border-top: 1px solid #292c33; background: #141519; display: flex; flex-direction: column; }
 .editor-column:has(.short-frame-controls) { grid-template-rows: minmax(300px, 1fr) 132px; }
 .short-frame-controls { display: flex; justify-content: center; gap: 6px; padding: 4px 0; }
 .short-frame-controls button { padding: 4px 10px; font-size: 11px; }
-.timeline-scroll { flex: 1; overflow-x: auto; overflow-y: hidden; padding: 4px 8px 8px; }
+.timeline-scroll { flex: 1; min-width: 0; overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain; padding: 4px 8px 8px; }
 .timeline { position: relative; min-width: 100%; height: 86px; background: var(--surface-track); border-radius: 6px; overflow: hidden; }
 .video-track { position: absolute; display: flex; left: 0; right: 0; top: 4px; height: 38px; }
 .source-segment { position: relative; min-width: 2px; border: 1px solid #3b6977; background: #284a56; overflow: hidden; }
@@ -433,6 +438,7 @@ progress::-moz-progress-bar { border-radius: inherit; background: var(--accent);
 .control-row input[type='color'] { width: 44px; height: 28px; padding: 2px; }
 .compact-controls { display: flex; gap: 4px; }.compact-controls select { width: 72px; }.compact-controls button { min-width: 29px; padding: 4px; }
 .stacked-control { flex-direction: column; }.stacked-control textarea { min-height: 72px; resize: vertical; padding: 7px; }
+.narration-panel .control-row input[type='number'] { flex-shrink: 1; min-width: 0; }
 .wide-button { width: 100%; }.danger { color: #ffb4b4; }.inspector .empty-note { margin-top: 35px; text-align: center; }
 
 @media (max-width: 1180px) {

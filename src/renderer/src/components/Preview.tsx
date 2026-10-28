@@ -7,7 +7,8 @@ import {
   segmentPlaybackRate,
   segmentSourceStart,
   sourceForSegment,
-  timelineDuration
+  timelineDuration,
+  type MarkSide
 } from '../model/timeline'
 import { transitionPreviewAtOutputTime } from '../model/transitions'
 import { focusCameraTransformAtTime } from '../model/focus-zoom'
@@ -18,12 +19,13 @@ import { usePresentedOutputTime } from './usePresentedOutputTime'
 import { gameAudioGainAtOutputTime } from '@shared/audio-envelope'
 import { usePreviewAudioMixer, type PreviewAudioMixer } from './usePreviewAudioMixer'
 import { RenderedPreview } from './RenderedPreview'
+import { FocusZoomCircle } from './FocusZoomCircle'
 import { IncomingTransitionVideo, OutgoingTransitionVideo } from './TransitionPreview'
-import { incomingTransitionMedia, secondaryPreviewMedia, mediaSource } from './preview-media'
+import { mediaSource } from './preview-media'
 import type { RenderedFacePreview } from '../model/use-face-preview'
 import { videoRangeStyleAtTime } from '../model/video-range-transition'
 import { isShortCanvas } from '@shared/short-frame'
-import { previewContext, previewSeekTime, previewSourceFps, shortFrameGuideRect, shortFrameGuideStyle, previewAudioCut } from './preview-context'
+import { previewContext, previewHandoff, previewSeekTime, previewSourceFps, shortFrameGuideRect, shortFrameGuideStyle, previewAudioCut, updateIncomingTransitionPlayhead, type AudioTail, type TransitionPreviewSnapshot } from './preview-context'
 import { ShortSourceBackdrop } from './ShortSourceBackdrop'
 
 export interface PreviewProps {
@@ -41,7 +43,7 @@ export interface PreviewProps {
   onOverlayGestureEnd: () => void
   onOverlayGestureCancel: () => void
   onAddMark: () => void
-  onClearMarks: () => void
+  onClearMark: (side: MarkSide) => void
   onRemoveMarked: () => void
   onUndo: () => void
   onRedo: () => void
@@ -106,20 +108,15 @@ interface SourcePreviewProps extends PreviewProps {
   total: number
 }
 
-interface AudioTail {
-  key: string
-  path: string
-  time: number
-  rate: number
-}
-
 function SourcePreview(props: SourcePreviewProps): React.JSX.Element {
   const videoRef = useRef<HTMLVideoElement>(null)
   const secondaryVideoRef = useRef<HTMLVideoElement>(null)
+  const incomingVideoRef = useRef<HTMLVideoElement>(null)
   const shortFrameRef = useRef<HTMLDivElement>(null)
   const [mediaFailure, setMediaFailure] = useState<{ path: string; message: string } | null>(null)
   const [readyPlaybackKey, setReadyPlaybackKey] = useState('')
   const [audioTail, setAudioTail] = useState<AudioTail | null>(null)
+  const [lastTransitionPreview, setLastTransitionPreview] = useState<TransitionPreviewSnapshot | null>(null)
   const activeSegment = useRef(0)
   const seekingFromTimeline = useRef(false)
   const currentPlaybackRef = useRef({ key: '', readyKey: '', sourceKey: '', generation: 0 })
@@ -158,55 +155,41 @@ function SourcePreview(props: SourcePreviewProps): React.JSX.Element {
     mediaTimeOffset
   )
   const transitionPreview = transitionPreviewAtOutputTime(props.session, visualTime)
-  const mainShowsTransition = Boolean(transitionPreview &&
-    position?.segmentIndex === transitionPreview.active.previousSegmentIndex + 1)
-  const waitingForSwitchedFrame = readyPlaybackKey !== '' && readyPlaybackKey !== playbackKey
-  const activeAudioTail = props.playing && audioTail?.key === playbackKey ? audioTail : null
-  const secondary = activeAudioTail ?? secondaryPreviewMedia(props.session, position, waitingForSwitchedFrame, requestedSourceTime)
-  const incomingTransition = incomingTransitionMedia(props.session, position)
-  const incomingTransitionFallback = transitionPreview && (!mainShowsTransition || readyPlaybackKey !== playbackKey)
-    ? transitionPreview
-    : null
-  const mainTransition = mainShowsTransition ? transitionPreview : null
+  const transitionSnapshotChanged = Boolean(transitionPreview && lastTransitionPreview?.key !== playbackKey)
+  if (transitionSnapshotChanged && transitionPreview) setLastTransitionPreview({ key: playbackKey, preview: transitionPreview })
+  else if (!transitionPreview && lastTransitionPreview && lastTransitionPreview.key !== playbackKey) setLastTransitionPreview(null)
+  const handoff = previewHandoff({
+    session: props.session, position, playbackKey, readyPlaybackKey, audioTail, lastTransitionPreview,
+    playing: props.playing, requestedSourceTime, transitionPreview
+  })
+  const { waitingForSwitchedFrame, secondary, incomingTransition, incomingRenderPreview, incomingAudioFallback,
+    fallbackAudio, audibleFallback, primaryHidden, mainTransition, clockPreview, fallbackClock } = handoff
   const rangeStyle = videoRangeStyleAtTime(props.session.videoTransitions ?? [], visualTime)
   const short = isShortCanvas(props.session.canvas)
   const shortFrameStyle = shortFrameGuideStyle(props.session, visualTime)
   const previewFit = short ? 'contain' : props.session.canvas.fit
-  const fallbackAudio = waitingForSwitchedFrame && !transitionPreview
-  // Keep preloaded overlap audio audible while the incoming primary decoder loads.
-  const audibleFallback = fallbackAudio || Boolean(incomingTransitionFallback)
   const previewGain = gameAudioGainAtOutputTime(props.session.overlays, visualTime)
   const currentSegment = position?.segment
   const { approachingAudioCut, audioCutTime } = previewAudioCut(props.session, position, visualTime, mediaTimeOffset)
-  const updateFromIncomingTransition = (mediaTime: number, path: string): void => {
-    // After handoff this retained decoder is no longer the next clip's preloader.
-    if (transitionPreview && !incomingTransitionFallback) return
-    const segmentIndex = incomingTransitionFallback
-      ? incomingTransitionFallback.active.previousSegmentIndex + 1
-      : (position?.segmentIndex ?? -1) + 1
-    const segment = props.session.segments[segmentIndex]
-    const source = segment ? sourceForSegment(props.session, segment) : null
-    if (!segment || source?.playbackPath !== path) return
-    let offset = mediaTimeOffsets.get(segment.id)
-    if (offset === undefined) {
-      const requestedTime = incomingTransitionFallback?.currentSourceTime ?? segmentSourceStart(segment)
-      offset = Math.max(0, mediaTime - requestedTime)
-      const capturedOffset = offset
-      setMediaTimeOffsets((previous) => new Map(previous).set(segment.id, capturedOffset))
-    }
-    if (!incomingTransitionFallback) return
-    onPlayheadRef.current(outputTimeForSource(
-      props.session.segments,
-      segmentIndex,
-      mediaTime - offset
-    ))
-  }
+  const circleProps = { effects: props.session.focusZooms, outputTime: visualTime, canvas: props.session.canvas }
+  const updateFromIncomingTransition = (mediaTime: number, path: string): void => updateIncomingTransitionPlayhead({
+    session: props.session, position, transitionPreview: incomingRenderPreview, clockPreview, mediaTime, path, mediaTimeOffsets,
+    rememberOffset: (segmentId, offset) => setMediaTimeOffsets((previous) => new Map(previous).set(segmentId, offset)),
+    onPlayhead: onPlayheadRef.current
+  })
   const markReadyForKey = (key: string): void => {
     if (currentPlaybackRef.current.key !== key || currentPlaybackRef.current.readyKey === key) return
+    // Do not drain the playing secondary fallback immediately before its next transition.
+    if (playingRef.current && fallbackAudio && approachingAudioCut) return
+    const transitionTail = lastTransitionPreview?.key === key ? lastTransitionPreview.preview : null
+    const incoming = incomingVideoRef.current
+    if (playingRef.current && transitionTail && incoming && !incoming.paused) {
+      setAudioTail({ kind: 'incoming', key, path: transitionTail.currentPath, time: incoming.currentTime, rate: incoming.playbackRate, preview: transitionTail })
+    }
     const fallback = secondaryVideoRef.current
-    if (playingRef.current && fallbackAudio && fallback && !fallback.paused) {
+    if (!transitionTail && playingRef.current && fallbackAudio && fallback && !fallback.paused) {
       // Keep the audible fallback source alive while its short mixer fade drains.
-      setAudioTail({ key, path: playbackPath, time: fallback.currentTime, rate: fallback.playbackRate })
+      setAudioTail({ kind: 'secondary', key, path: playbackPath, time: fallback.currentTime, rate: fallback.playbackRate })
     }
     currentPlaybackRef.current.readyKey = key
     setReadyPlaybackKey(key)
@@ -217,7 +200,7 @@ function SourcePreview(props: SourcePreviewProps): React.JSX.Element {
       markReadyForKey(playbackKey)
     }
   }
-  const markIncomingPresented = (video: HTMLVideoElement): void => {
+  const markIncomingPresented = (video: HTMLVideoElement, allowClockFallback = false): void => {
     if (!waitingForSwitchedFrame || !props.playing) {
       // A paused seek may have presented its only frame before `seeked`; don't await RVFC.
       markIncomingReady(video)
@@ -230,7 +213,9 @@ function SourcePreview(props: SourcePreviewProps): React.JSX.Element {
       const currentPlayback = currentPlaybackRef.current
       if (currentPlayback.key !== handoffKey || currentPlayback.readyKey === handoffKey ||
         video !== videoRef.current || !video.isConnected || video.seeking || video.readyState < 2) return
-      const fallback = fallbackAudio ? secondaryVideoRef.current : null
+      const fallback = fallbackClock === 'secondary'
+        ? secondaryVideoRef.current
+        : fallbackClock === 'incoming' ? incomingVideoRef.current : null
       // Compare media clocks; RVFC mediaTime is a presented-frame timestamp, not the audio clock.
       const difference = fallback ? fallback.currentTime - video.currentTime : 0
       if (difference > frameTolerance) {
@@ -244,12 +229,17 @@ function SourcePreview(props: SourcePreviewProps): React.JSX.Element {
         return
       }
       video.playbackRate = baseRate
-      // While playing, this callback already reports the current presented frame;
-      // do not compare it with the handoff's captured seek time.
+      // The decoded media clock is advancing here; do not compare it with
+      // the handoff's captured seek target, which is already in the past.
       if (playingRef.current) markReadyForKey(handoffKey)
       else markIncomingReady(video)
     }
-    video.requestVideoFrameCallback(synchronize)
+    if (allowClockFallback) {
+      const frameAdvance = baseRate / Math.max(1, props.session.canvas.fps)
+      const segmentStart = position ? segmentSourceStart(position.segment) + mediaTimeOffset : mediaTimeOffset
+      if (video.currentTime < segmentStart + frameAdvance) return
+      synchronize()
+    } else video.requestVideoFrameCallback(synchronize)
   }
   const startIncomingWhenReady = (video: HTMLVideoElement): void => {
     markIncomingPresented(video)
@@ -258,36 +248,31 @@ function SourcePreview(props: SourcePreviewProps): React.JSX.Element {
     }
   }
   useFreezePlayback(videoRef, position, props.session.playhead, props.playing, props.total, props.onPlayhead)
-
   useEffect(() => {
     const video = videoRef.current
     return video ? props.mixer.register(video) : undefined
   }, [props.mixer])
-
   useEffect(() => {
     const video = videoRef.current
     if (!video) return
-    // Silence the final 10 ms at a clip boundary so arbitrary source samples cannot click.
-    if (!audibleFallback && props.playing && approachingAudioCut && currentSegment && !isFreezeSegment(currentSegment)) {
+    // Finish the boundary fade before either decoder changes its source.
+    if (!audibleFallback && props.playing && audioCutTime !== undefined && currentSegment && !isFreezeSegment(currentSegment)) {
       // Presented frames can lag the audio clock; schedule against the media clock.
-      const delay = (currentSegment.sourceEnd + mediaTimeOffset - video.currentTime) / segmentPlaybackRate(currentSegment) - 0.01
+      const delay = (audioCutTime - video.currentTime) / segmentPlaybackRate(currentSegment) - 0.01
       props.mixer.setGain(video, 0, delay, 0.01)
     } else {
       // A new decoder must start muted; its playing event starts the fade-in.
       // Starting the ramp during loading exposes its first sample at high gain.
       props.mixer.setGain(video, audibleFallback || video.readyState < 2 ? 0 : previewGain)
     }
-  }, [approachingAudioCut, currentSegment, audibleFallback, mediaTimeOffset, playbackKey, previewGain, props.mixer, props.playing])
-
+  }, [audioCutTime, currentSegment, audibleFallback, playbackKey, previewGain, props.mixer, props.playing])
   useEffect(() => {
     if (!audioTail) return
     // Allow the 20 ms mixer fade plus audio scheduling slack before pausing or retargeting.
     const timeout = window.setTimeout(() => setAudioTail(null), 40)
     return () => window.clearTimeout(timeout)
   }, [audioTail])
-
   useEffect(() => { if (props.playing) props.mixer.resume() }, [props.mixer, props.playing])
-
   useEffect(() => {
     const video = videoRef.current
     const currentPosition = positionAtOutputTime(props.session.segments, props.session.playhead)
@@ -302,7 +287,6 @@ function SourcePreview(props: SourcePreviewProps): React.JSX.Element {
       video.currentTime = seekTime
     }
   }, [mediaTimeOffset, playbackPath, props.playing, props.session])
-
   useEffect(() => {
     const video = videoRef.current
     // timeupdate can arrive 250 ms late. Use the existing frame clock to leave
@@ -312,7 +296,6 @@ function SourcePreview(props: SourcePreviewProps): React.JSX.Element {
       video.currentTime - mediaTimeOffset < currentSegment.sourceEnd) return
     updatePlayback(video, props.session, activeSegment, mediaTimeOffset, props.total, onPlayheadRef.current, onPlayingChangeRef.current)
   }, [currentSegment, mediaTimeOffset, position?.segmentIndex, props.playing, props.session, props.total, visualTime])
-
   useEffect(() => {
     const video = videoRef.current
     if (!video) return
@@ -322,7 +305,6 @@ function SourcePreview(props: SourcePreviewProps): React.JSX.Element {
       video.pause()
     }
   }, [playbackPath, position?.segmentIndex, positionIsFreeze, props.playing])
-
   useEffect(() => {
     if (props.session.playhead >= props.total && props.playing) onPlayingChangeRef.current(false)
   }, [props.playing, props.session.playhead, props.total])
@@ -348,7 +330,7 @@ function SourcePreview(props: SourcePreviewProps): React.JSX.Element {
         preloadPath={secondary.path}
         preloadTime={secondary.time}
         preloadRate={secondary.rate}
-        showFallback={waitingForSwitchedFrame}
+        showFallback={fallbackAudio}
         audibleFallback={fallbackAudio}
         fallbackGain={previewGain}
         audioCutTime={audioCutTime}
@@ -358,16 +340,16 @@ function SourcePreview(props: SourcePreviewProps): React.JSX.Element {
         fit={previewFit}
         className="preview-source-video preview-transition-previous"
       />
-      <div className="preview-transition-incoming-layer" style={{ opacity: Number(Boolean(incomingTransitionFallback)) }}>
+      <div className="preview-transition-incoming-layer" style={{ opacity: Number(incomingAudioFallback) }}>
         <IncomingTransitionVideo
-          preview={transitionPreview}
+          preview={incomingRenderPreview}
           playing={props.playing}
           preloadPath={incomingTransition.path}
           preloadTime={incomingTransition.time}
           preloadRate={incomingTransition.rate}
           onPresentedTime={updateFromIncomingTransition}
-          mixer={props.mixer}
-          audibleFallback={Boolean(incomingTransitionFallback)}
+          mixer={props.mixer} mediaRef={incomingVideoRef}
+          audibleFallback={incomingAudioFallback}
           fallbackGain={previewGain}
           fit={previewFit}
           className="preview-transition-incoming"
@@ -382,7 +364,7 @@ function SourcePreview(props: SourcePreviewProps): React.JSX.Element {
           objectFit: previewFit,
           ...rangeStyle,
           ...mainTransition?.styles.current,
-          visibility: incomingTransitionFallback || waitingForSwitchedFrame ? 'hidden' : 'visible'
+          visibility: primaryHidden ? 'hidden' : 'visible'
         }}
         data-transition={mainTransition?.active.effect}
         preload="auto"
@@ -402,13 +384,21 @@ function SourcePreview(props: SourcePreviewProps): React.JSX.Element {
         }}
         onTimeUpdate={(event) => {
           if (!playingRef.current || seekingFromTimeline.current) return
-          updatePlayback(event.currentTarget, props.session, activeSegment, mediaTimeOffset, props.total, onPlayheadRef.current, onPlayingChangeRef.current)
+          const video = event.currentTarget
+          if (waitingForSwitchedFrame && !transitionPreview && !video.paused && video.readyState >= 2 && !video.seeking) {
+            markIncomingPresented(video, true)
+          }
+          updatePlayback(video, props.session, activeSegment, mediaTimeOffset, props.total, onPlayheadRef.current, onPlayingChangeRef.current)
         }}
       />
+      {!short && <FocusZoomCircle {...circleProps} />}
       {mediaError && <div className="preview-error" role="alert">{mediaError}</div>}
       {!short && overlays}
     </div>
-    {short && shortFrameStyle && <div ref={shortFrameRef} className="short-frame-guide" style={shortFrameStyle}>{overlays}</div>}
+    {short && shortFrameStyle && <div ref={shortFrameRef} className="short-frame-guide" style={shortFrameStyle}>
+      <FocusZoomCircle {...circleProps} />
+      {overlays}
+    </div>}
   </>
 }
 
@@ -489,7 +479,7 @@ export function Preview(props: PreviewProps): React.JSX.Element {
         onZoom={props.onZoom}
         onStep={props.onStep}
         onAddMark={props.onAddMark}
-        onClearMarks={props.onClearMarks}
+        onClearMark={props.onClearMark}
         onRemoveMarked={props.onRemoveMarked}
         onUndo={props.onUndo}
         onRedo={props.onRedo}

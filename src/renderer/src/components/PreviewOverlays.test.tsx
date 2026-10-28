@@ -2,7 +2,8 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ImageOverlay, MediaMetadata, Overlay } from '@shared/types'
-import { createSession } from '../model/timeline'
+import { createSession, defaultTextOverlay } from '../model/timeline'
+import { narrationSubtitleOverlays } from '../model/narration-subtitles'
 import type { PreviewAudioMixer } from './usePreviewAudioMixer'
 import { PreviewOverlays } from './PreviewOverlays'
 
@@ -48,6 +49,14 @@ function mixer(): PreviewAudioMixer {
   return { register: vi.fn(() => () => undefined), setGain: vi.fn(), resume: vi.fn() }
 }
 
+interface OverlayHandlers {
+  onSelect?: (id: string | null) => void
+  onChange?: (id: string, patch: Partial<Overlay>) => void
+  onGestureStart?: () => void
+  onGestureEnd?: () => void
+  onGestureCancel?: () => void
+}
+
 function sessionWithOverlay(overlay: Overlay) {
   const session = createSession(metadata)
   session.overlays = [overlay]
@@ -71,7 +80,8 @@ async function flushMediaUrl(): Promise<void> {
 let root: Root | undefined
 let container: HTMLDivElement | undefined
 
-function mount(session: ReturnType<typeof sessionWithOverlay>, playing: boolean, outputTime: number, audioMixer: PreviewAudioMixer): HTMLDivElement {
+function mount(session: ReturnType<typeof sessionWithOverlay>, playing: boolean, outputTime: number, audioMixer: PreviewAudioMixer,
+  handlers: OverlayHandlers = {}): HTMLDivElement {
   container = document.createElement('div')
   document.body.append(container)
   root = createRoot(container)
@@ -82,11 +92,11 @@ function mount(session: ReturnType<typeof sessionWithOverlay>, playing: boolean,
       playing={playing}
       outputTime={outputTime}
       stageRef={stageRef}
-      onSelect={vi.fn()}
-      onChange={vi.fn()}
-      onGestureStart={vi.fn()}
-      onGestureEnd={vi.fn()}
-      onGestureCancel={vi.fn()}
+      onSelect={handlers.onSelect ?? vi.fn()}
+      onChange={handlers.onChange ?? vi.fn()}
+      onGestureStart={handlers.onGestureStart ?? vi.fn()}
+      onGestureEnd={handlers.onGestureEnd ?? vi.fn()}
+      onGestureCancel={handlers.onGestureCancel ?? vi.fn()}
       mixer={audioMixer}
     />)
   })
@@ -262,5 +272,55 @@ describe('preview overlay media synchronization', () => {
     if (!(videoElement instanceof HTMLVideoElement)) throw new Error('preview video missing')
     expect(videoElement.style.opacity).toBe('0')
     expect(videoElement.style.transform).toContain('translate(0%, 20%) scale(0.92)')
+  })
+
+  it('shows generated captions only during their line and enabled narration branch', async () => {
+    installBridge((path) => Promise.resolve(`media:${path}`))
+    const owner: AudioOverlay = {
+      ...audioOverlay(), id: 'narration-owner', start: 2, duration: 8,
+      narration: { draftId: 'draft-1', enabled: true }
+    }
+    const session = createSession(metadata)
+    const caption = narrationSubtitleOverlays(session, owner, [{ start: 0.5, end: 1.5, text: 'Generated caption.' }])[0]
+    if (!caption) throw new Error('caption overlay missing')
+    session.overlays = [owner, caption]
+    session.selectedOverlayId = caption.id
+    const audioMixer = mixer()
+    const onSelect = vi.fn()
+    const onGestureStart = vi.fn()
+    const app = mount(session, false, 2.49, audioMixer, { onSelect, onGestureStart })
+    await flushMediaUrl()
+
+    expect(app.querySelector('.preview-text')).toBeNull()
+    update(session, false, 2.5, audioMixer)
+    expect(app.querySelector('.preview-text')?.textContent).toBe('Generated caption.')
+    const captionItem = app.querySelector('.visual-overlay')
+    expect(captionItem).not.toBeNull()
+    expect((captionItem as HTMLElement).style.pointerEvents).toBe('none')
+    expect(captionItem?.classList.contains('selected')).toBe(false)
+    expect(app.querySelector('.resize-handle')).toBeNull()
+    act(() => { captionItem?.dispatchEvent(new Event('pointerdown', { bubbles: true })) })
+    expect(onSelect).not.toHaveBeenCalled()
+    expect(onGestureStart).not.toHaveBeenCalled()
+    update(session, false, 3.5, audioMixer)
+    expect(app.querySelector('.preview-text')).toBeNull()
+
+    owner.narration = { draftId: 'draft-1', enabled: false }
+    update(session, false, 2.75, audioMixer)
+    expect(app.querySelector('.preview-text')).toBeNull()
+  })
+
+  it('keeps ordinary selected text overlays editable', () => {
+    installBridge((path) => Promise.resolve(`media:${path}`))
+    const text = { ...defaultTextOverlay(0, 2), id: 'ordinary-text', text: 'Editable text' }
+    const session = sessionWithOverlay(text)
+    session.selectedOverlayId = text.id
+    const app = mount(session, false, 1, mixer())
+
+    const visualItem = app.querySelector('.visual-overlay')
+    expect(visualItem?.classList.contains('selected')).toBe(true)
+    expect((visualItem as HTMLElement | null)?.style.pointerEvents).not.toBe('none')
+    expect(app.querySelector('.resize-handle')).not.toBeNull()
+    expect(app.querySelector('.preview-text')?.textContent).toBe('Editable text')
   })
 })

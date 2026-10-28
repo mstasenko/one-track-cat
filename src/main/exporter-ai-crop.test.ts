@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process'
 import { join } from 'node:path'
 import type { ExportRequest } from '../types'
 
-const aiPipeline = vi.hoisted(() => ({
+const upscalePipeline = vi.hoisted(() => ({
   mkdir: vi.fn(),
   mkdtemp: vi.fn(),
   rename: vi.fn(),
@@ -11,7 +11,7 @@ const aiPipeline = vi.hoisted(() => ({
   writeFile: vi.fn(),
   ensureDiskSpace: vi.fn(),
   ensureFaceExportDiskSpace: vi.fn(),
-  requireAiPack: vi.fn(),
+  requireUpscalePack: vi.fn(),
   exportEncoders: vi.fn(),
   softwareEncoder: vi.fn(),
   integratedDecodeDevice: vi.fn(),
@@ -27,35 +27,35 @@ vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>()
   const replacement = {
     ...actual,
-    mkdir: aiPipeline.mkdir,
-    mkdtemp: aiPipeline.mkdtemp,
-    rename: aiPipeline.rename,
-    rm: aiPipeline.rm,
-    writeFile: aiPipeline.writeFile
+    mkdir: upscalePipeline.mkdir,
+    mkdtemp: upscalePipeline.mkdtemp,
+    rename: upscalePipeline.rename,
+    rm: upscalePipeline.rm,
+    writeFile: upscalePipeline.writeFile
   }
   return { ...replacement, default: replacement }
 })
 vi.mock('./binaries', () => ({ ffmpegPath: () => '/usr/bin/ffmpeg', ffprobePath: () => '/usr/bin/ffprobe' }))
-vi.mock('./jobs', () => ({ jobs: { run: aiPipeline.jobsRun } }))
+vi.mock('./jobs', () => ({ jobs: { run: upscalePipeline.jobsRun } }))
 vi.mock('./export-space', () => ({
-  ensureDiskSpace: aiPipeline.ensureDiskSpace,
-  ensureFaceExportDiskSpace: aiPipeline.ensureFaceExportDiskSpace
+  ensureDiskSpace: upscalePipeline.ensureDiskSpace,
+  ensureFaceExportDiskSpace: upscalePipeline.ensureFaceExportDiskSpace
 }))
-vi.mock('./ai-pack', () => ({ requireAiPack: aiPipeline.requireAiPack }))
+vi.mock('./upscale-pack', () => ({ requireUpscalePack: upscalePipeline.requireUpscalePack }))
 vi.mock('./export-encoder', () => ({
-  exportEncoders: aiPipeline.exportEncoders,
-  softwareEncoder: aiPipeline.softwareEncoder,
-  integratedDecodeDevice: aiPipeline.integratedDecodeDevice
+  exportEncoders: upscalePipeline.exportEncoders,
+  softwareEncoder: upscalePipeline.softwareEncoder,
+  integratedDecodeDevice: upscalePipeline.integratedDecodeDevice
 }))
 vi.mock('./face-export', () => ({
   encodeWithFaces: vi.fn(),
-  decoderCommand: aiPipeline.decoderCommand,
-  faceEffectRows: aiPipeline.faceEffectRows,
-  rawVideoEncoderCommand: aiPipeline.rawVideoEncoderCommand
+  decoderCommand: upscalePipeline.decoderCommand,
+  faceEffectRows: upscalePipeline.faceEffectRows,
+  rawVideoEncoderCommand: upscalePipeline.rawVideoEncoderCommand
 }))
-vi.mock('./face-process', () => ({ runFacePipeline: aiPipeline.runFacePipeline, FaceAuthorizationError: class extends Error {} }))
+vi.mock('./face-process', () => ({ runFacePipeline: upscalePipeline.runFacePipeline, FaceAuthorizationError: class extends Error {} }))
 vi.mock('./face-detection-cache', () => ({ prepareFaceDetectionCache: vi.fn() }))
-vi.mock('./face-worker', () => ({ restrictedIntelRenderNode: vi.fn().mockResolvedValue(undefined) }))
+vi.mock('./intel-device', () => ({ restrictedIntelRenderNode: vi.fn().mockResolvedValue(undefined) }))
 vi.mock('./privileged-export', () => ({ encodeWithPrivilegedGpu: vi.fn() }))
 vi.mock('./face-preview-cache', () => ({ tryReuseFacePreview: vi.fn().mockResolvedValue(false) }))
 
@@ -69,26 +69,26 @@ const encoder = {
 beforeEach(() => {
   vi.clearAllMocks()
   vi.stubEnv('otc_CPU_ONLY', undefined)
-  aiPipeline.mkdir.mockResolvedValue(undefined)
-  aiPipeline.mkdtemp.mockResolvedValue('/output/.otc-export-test')
-  aiPipeline.rename.mockResolvedValue(undefined)
-  aiPipeline.rm.mockResolvedValue(undefined)
-  aiPipeline.writeFile.mockResolvedValue(undefined)
-  aiPipeline.ensureDiskSpace.mockResolvedValue(undefined)
-  aiPipeline.ensureFaceExportDiskSpace.mockResolvedValue(undefined)
-  aiPipeline.requireAiPack.mockResolvedValue({ executable: '/ai-worker', models: '/models/flash', rife: '/rife.xml' })
-  aiPipeline.exportEncoders.mockResolvedValue([encoder])
-  aiPipeline.softwareEncoder.mockReturnValue(encoder)
-  aiPipeline.integratedDecodeDevice.mockResolvedValue(undefined)
-  aiPipeline.decoderCommand.mockImplementation((inputArgs: string[], filter: { graph: string; videoLabel: string; audioLabel: string }) => ({
+  upscalePipeline.mkdir.mockResolvedValue(undefined)
+  upscalePipeline.mkdtemp.mockResolvedValue('/output/.otc-export-test')
+  upscalePipeline.rename.mockResolvedValue(undefined)
+  upscalePipeline.rm.mockResolvedValue(undefined)
+  upscalePipeline.writeFile.mockResolvedValue(undefined)
+  upscalePipeline.ensureDiskSpace.mockResolvedValue(undefined)
+  upscalePipeline.ensureFaceExportDiskSpace.mockResolvedValue(undefined)
+  upscalePipeline.requireUpscalePack.mockResolvedValue({ executable: '/upscale-worker', models: '/models/flash', rife: '/rife.xml' })
+  upscalePipeline.exportEncoders.mockResolvedValue([encoder])
+  upscalePipeline.softwareEncoder.mockReturnValue(encoder)
+  upscalePipeline.integratedDecodeDevice.mockResolvedValue(undefined)
+  upscalePipeline.decoderCommand.mockImplementation((inputArgs: string[], filter: { graph: string; videoLabel: string; audioLabel: string }) => ({
     executable: '/decoder',
     args: [...inputArgs, '-filter_complex', filter.graph, '-map', `[${filter.videoLabel}]`, '-map', `[${filter.audioLabel}]`]
   }))
-  aiPipeline.rawVideoEncoderCommand.mockImplementation((_encoder: typeof encoder, _width: number, _height: number, _fps: number, _duration: number, video: string) => ({
+  upscalePipeline.rawVideoEncoderCommand.mockImplementation((_encoder: typeof encoder, _width: number, _height: number, _fps: number, _duration: number, video: string) => ({
     executable: '/ffmpeg', args: ['-i', video]
   }))
-  aiPipeline.runFacePipeline.mockResolvedValue(undefined)
-  aiPipeline.jobsRun.mockResolvedValue(undefined)
+  upscalePipeline.runFacePipeline.mockResolvedValue(undefined)
+  upscalePipeline.jobsRun.mockResolvedValue(undefined)
 })
 
 afterEach(() => {
@@ -189,11 +189,11 @@ describe('AI input crop graph', () => {
     expect(segments[0]).toContain("if(lt(t,2),0.6+(0.3)*")
     expect(segments[0]).not.toContain('(t+1.000000)')
     expect(segments[1]).toContain("if(lt((t+1.000000),2),0.6+(0.3)*")
-    expect(filter.graph).toContain("xfade=transition=custom:expr='A*(P*P*(3-2*P))")
+    expect(filter.graph).toContain('[voutgoing1trimmed][vincoming1trimmed]blend@vfade1=all_mode=normal:')
   })
 
   it.each(['turbo', 'base'] as const)('passes the moving portrait crop into the real %s AI pipeline command', async (mode) => {
-    const aiRequest = {
+    const upscaleRequest = {
       ...request(
         { width: 1080, height: 1920, fps: 30.000845094228005, fit: 'cover' },
         [
@@ -201,25 +201,25 @@ describe('AI input crop graph', () => {
           { id: 'end', time: 1, position: 0.9 }
         ]
       ),
-      aiEnhance: { mode }
+      upscale: { mode }
     }
 
-    await exportVideo(aiRequest)
+    await exportVideo(upscaleRequest)
 
-    const commands = aiPipeline.runFacePipeline.mock.calls[0]?.[0] as { executable: string; args: string[] }[] | undefined
+    const commands = upscalePipeline.runFacePipeline.mock.calls[0]?.[0] as { executable: string; args: string[] }[] | undefined
     expect(commands).toHaveLength(3)
     const decoder = commands?.[0]
-    const aiWorker = commands?.[1]
+    const upscaleWorker = commands?.[1]
     expect(decoder?.executable).toBe('/decoder')
     expect(decoder?.args).toEqual(expect.arrayContaining(['-filter_complex']))
     const graph = decoder?.args[decoder.args.indexOf('-filter_complex') + 1] ?? ''
     expect(graph).toContain("crop=1080:1920:x='(iw-ow)*(if(lt(t,1),0.6+(0.3)*")
     expect(graph.indexOf('crop=1080:1920')).toBeLessThan(graph.indexOf('[vseg0]null[basev]'))
-    expect(aiWorker).toMatchObject({ executable: '/ai-worker' })
-    expect(aiWorker?.args).toEqual(expect.arrayContaining([
+    expect(upscaleWorker).toMatchObject({ executable: '/upscale-worker' })
+    expect(upscaleWorker?.args).toEqual(expect.arrayContaining([
       '--mode', mode, '--width', '1080', '--height', '1920',
       '--output-width', '2160', '--output-height', '3840', '--output-fps', '60'
     ]))
-    expect(aiWorker?.args).not.toContain('/input/source.mp4')
+    expect(upscaleWorker?.args).not.toContain('/input/source.mp4')
   })
 })

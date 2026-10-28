@@ -4,12 +4,13 @@ function displayed(value: number): string {
   return String(Number(value.toFixed(3)))
 }
 
-export function NumberControl({ label, value, min, max, step, onChange }: {
+export function NumberControl({ label, value, min, max, step, disabled, onChange }: {
   label: string
   value: number
   min: number
   max: number
   step: number
+  disabled?: boolean
   onChange: (value: number) => void
 }): React.JSX.Element {
   const input = useRef<HTMLInputElement>(null)
@@ -32,6 +33,7 @@ export function NumberControl({ label, value, min, max, step, onChange }: {
         ref={input}
         aria-label={label}
         type="number"
+        disabled={disabled}
         inputMode="decimal"
         value={draft}
         min={min}

@@ -57,6 +57,27 @@ describe('face cache cleanup', () => {
     expect(mocks.clearFaceDetectionCache).toHaveBeenCalledOnce()
   })
 
+  it('clears stale atomic temps and interrupted detection jobs without following symlinks', async () => {
+    const uuid = '00000000-0000-0000-0000-000000000000'
+    const staleFiles = [
+      `preview.json.${uuid}.tmp`,
+      `preview-0-300.mp4.${uuid}.tmp`,
+      `detections.cache.json.${uuid}.tmp`
+    ]
+    for (const name of staleFiles) await writeFile(join(cacheDirectory, name), 'stale')
+    const staleLink = join(cacheDirectory, `preview.mp4.${uuid}.tmp`)
+    await symlink(join(directory, 'outside-face-preview'), staleLink)
+    const job = join(cacheDirectory, 'detections-job-ab12CD')
+    await mkdir(job)
+    await writeFile(join(job, 'input.cache'), 'stale')
+
+    await clearFaceCache()
+
+    for (const name of staleFiles) await expect(readFile(join(cacheDirectory, name))).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(readFile(staleLink)).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(readFile(join(job, 'input.cache'))).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
   it('does not traverse a symlinked cache directory', async () => {
     const target = join(directory, 'outside-face-preview')
     await mkdir(target)

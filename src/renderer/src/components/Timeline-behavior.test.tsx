@@ -47,6 +47,12 @@ function pointer(target: EventTarget, type: string, options: Record<string, unkn
   act(() => { target.dispatchEvent(event) })
 }
 
+function wheel(target: EventTarget, options: WheelEventInit): WheelEvent {
+  const event = new WheelEvent('wheel', { bubbles: true, cancelable: true, ...options })
+  act(() => { target.dispatchEvent(event) })
+  return event
+}
+
 function element(app: HTMLDivElement, selector: string): HTMLElement {
   const result = app.querySelector<HTMLElement>(selector)
   if (!result) throw new Error(`Missing ${selector}`)
@@ -63,7 +69,7 @@ afterEach(() => {
 })
 
 describe('Timeline interactions', () => {
-  it('clamps seeks to the timeline and zooms in either direction', () => {
+  it('clamps seeks and routes wheel movement or modifier zoom', () => {
     const onSeek = vi.fn()
     const onZoom = vi.fn()
     const app = mount(createSession(metadata), { onSeek, onZoom, zoom: 2 })
@@ -72,9 +78,24 @@ describe('Timeline interactions', () => {
     pointer(track, 'pointerdown', { clientX: 400 })
     expect(onSeek.mock.calls).toEqual([[0], [10]])
     const scroll = element(app, '.timeline-scroll')
-    act(() => { scroll.dispatchEvent(new WheelEvent('wheel', { bubbles: true, deltaY: -1 })) })
-    act(() => { scroll.dispatchEvent(new WheelEvent('wheel', { bubbles: true, deltaY: 1 })) })
+    Object.defineProperties(scroll, {
+      clientWidth: { configurable: true, value: 100 },
+      scrollWidth: { configurable: true, value: 300 },
+      scrollLeft: { configurable: true, writable: true, value: 100 }
+    })
+    wheel(scroll, { deltaY: 250 })
+    expect(scroll.scrollLeft).toBe(200)
+    wheel(scroll, { deltaX: -400 })
+    expect(scroll.scrollLeft).toBe(0)
+    wheel(scroll, { deltaY: 50, shiftKey: true })
+    expect(scroll.scrollLeft).toBe(50)
+    wheel(scroll, { deltaY: 0 })
+    expect(scroll.scrollLeft).toBe(50)
+    expect(onZoom).not.toHaveBeenCalled()
+    wheel(scroll, { deltaY: -1, ctrlKey: true })
+    wheel(scroll, { deltaY: 1, metaKey: true })
     expect(onZoom.mock.calls).toEqual([[2.25], [1.75]])
+    expect(scroll.title).toBe('Scroll to move; Ctrl/Cmd+scroll to zoom')
   })
 
   it('opens a clamped mouse-hover thumbnail, seeks it after metadata, and dismisses other pointer modes', () => {
@@ -161,6 +182,64 @@ describe('Timeline interactions', () => {
     expect(app.querySelector('.overlay-fade')).toBeNull()
   })
 
+  it('keeps generated captions in the hover preview without making them timeline blocks', () => {
+    const session = createSession(metadata)
+    const generatedCaption: Overlay = { ...text, id: 'subtitle', name: 'Subtitle', text: 'Generated caption', narrationId: 'draft-id' }
+    const voice: Overlay = { id: 'voice', type: 'audio', name: 'Re-voice', path: '/voice.wav',
+      start: 2, duration: 3, sourceIn: 0, volume: 1, zIndex: 0,
+      narration: { draftId: 'draft-id', enabled: true } }
+    session.overlays = [text, generatedCaption, voice]
+
+    const app = mount(session)
+    expect([...app.querySelectorAll<HTMLButtonElement>('.timeline-overlay')].map((button) => button.title)).toEqual(['Caption · Pop', 'Re-voice'])
+
+    pointer(element(app, '.timeline'), 'pointermove')
+    expect([...app.querySelectorAll('.timeline-hover-overlay')].map((overlay) => overlay.getAttribute('aria-label')))
+      .toEqual(['Caption', 'Subtitle'])
+  })
+
+  it('hides generated captions when their Re-voice owner is disabled', () => {
+    const session = createSession(metadata)
+    const generatedCaption: Overlay = { ...text, id: 'subtitle', name: 'Subtitle', text: 'Generated caption', narrationId: 'draft-id' }
+    const voice: Overlay = { id: 'voice', type: 'audio', name: 'Re-voice', path: '/voice.wav',
+      start: 2, duration: 3, sourceIn: 0, volume: 1, zIndex: 0,
+      narration: { draftId: 'draft-id', enabled: false } }
+    session.overlays = [text, generatedCaption, voice]
+
+    const app = mount(session)
+    pointer(element(app, '.timeline'), 'pointermove')
+    expect([...app.querySelectorAll('.timeline-hover-overlay')].map((overlay) => overlay.getAttribute('aria-label')))
+      .toEqual(['Caption'])
+  })
+
+  it('shows the shared focus circle in the hover preview', () => {
+    const session = createSession(metadata)
+    session.focusZooms = [{ id: 'circle', start: 0, duration: 5, mode: 'circle', zoom: 2, focusX: 0.5, focusY: 0.5 }]
+
+    const app = mount(session)
+    pointer(element(app, '.timeline'), 'pointermove')
+    const circle = app.querySelector<SVGSVGElement>('.timeline-hover-frame .focus-zoom-circle')
+    expect(circle).not.toBeNull()
+    expect(circle?.getAttribute('viewBox')).toBe('0 0 320 180')
+  })
+
+  it('selects Re-voice without dragging its fixed audio anchors', () => {
+    const session = createSession(metadata)
+    session.overlays = [{ id: 'voice', type: 'audio', name: 'Re-voice', path: '/voice.wav',
+      start: 2, duration: 3, sourceIn: 0, volume: 1, zIndex: 0,
+      narration: { draftId: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', enabled: true } }]
+    const onSelectOverlay = vi.fn()
+    const onOverlayChange = vi.fn()
+    const onOverlayGestureStart = vi.fn()
+    const app = mount(session, { onSelectOverlay, onOverlayChange, onOverlayGestureStart })
+    pointer(element(app, '.timeline-overlay'), 'pointerdown', { clientX: 150 })
+    pointer(window, 'pointermove', { clientX: 180 })
+    pointer(window, 'pointerup')
+    expect(onSelectOverlay).toHaveBeenCalledWith('voice')
+    expect(onOverlayChange).not.toHaveBeenCalled()
+    expect(onOverlayGestureStart).not.toHaveBeenCalled()
+  })
+
   it('drags overlays within project bounds and ends or cancels each gesture exactly once', () => {
     const session = createSession(metadata)
     session.overlays = [text]
@@ -192,7 +271,10 @@ describe('Timeline interactions', () => {
   it('shows marks, selection, transition/focus/face bands and selects faces without seeking', () => {
     const session = createSession(metadata)
     session.marks = [2, 4]
-    session.focusZooms = [{ id: 'focus', start: 1, duration: 2, zoom: 2, focusX: 0.5, focusY: 0.5 }]
+    session.focusZooms = [
+      { id: 'focus', start: 1, duration: 2, zoom: 2, focusX: 0.5, focusY: 0.5 },
+      { id: 'circle', start: 4, duration: 2, mode: 'circle', zoom: 3, focusX: 0.5, focusY: 0.5 }
+    ]
     session.videoTransitions = [{ id: 'range', start: 3, duration: 1 }]
     session.faceBlurs = [{ id: 'face', start: 2, duration: 3, sensitivity: 0.5, detail: 'standard', holdSeconds: 0.5, strength: 0.5, style: 'blur' }]
     const onSelectFaceBlur = vi.fn()
@@ -200,7 +282,7 @@ describe('Timeline interactions', () => {
     const app = mount(session, { selectedFaceBlurId: 'face', onSelectFaceBlur, onSeek })
     expect(app.querySelectorAll('.timeline-mark')).toHaveLength(2)
     expect(element(app, '.timeline-selection').style.width).toBe('20%')
-    expect(element(app, '.focus-zoom-range').textContent).toBe('2×')
+    expect([...app.querySelectorAll('.focus-zoom-range span')].map((label) => label.textContent)).toEqual(['2×', 'Circle 3×'])
     expect(element(app, '.video-transition-range').textContent).toBe('Transition')
     const face = element(app, '.face-blur-range')
     expect(face.getAttribute('aria-pressed')).toBe('true')

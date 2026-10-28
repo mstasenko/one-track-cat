@@ -215,7 +215,7 @@ export function removeOutputRange(
   return {
     // A transition cannot lead into the first remaining clip because there is no
     // outgoing frame. Removing it also keeps restored projects deterministic.
-    segments: output.map((segment, index) => index === 0 ? withTransition(segment) : segment),
+    segments: withCutTransitions(output.map((segment, index) => index === 0 ? withTransition(segment) : segment)),
     overlays: trimOverlaysForRemoval(overlays, start, end)
   }
 }
@@ -237,6 +237,21 @@ export function withTransition(
   delete plainSegment.transition
   const fitted = fittedTransition(transition, segmentOutputDuration(segment))
   return fitted ? { ...plainSegment, transition: fitted } : plainSegment
+}
+
+/** Soften removed sections without changing timing or fades chosen for inserts. */
+export function withCutTransitions(segments: SourceSegment[]): SourceSegment[] {
+  const result = segments.map((segment, index) => {
+    const previous = segments[index - 1]
+    if (!previous || isFreezeSegment(previous) || isFreezeSegment(segment) || segment.transition ||
+      previous.sourceId !== segment.sourceId) return segment
+    // A forward source gap identifies a cut; contiguous footage and replays stay untouched.
+    const gap = (segment.sourceStart - previous.sourceEnd) / segmentPlaybackRate(previous)
+    const duration = Math.min(0.5, gap, segmentOutputDuration(previous), segmentOutputDuration(segment))
+    if (duration < 0.05) return segment
+    return withTransition(segment, { effect: 'fade', duration })
+  })
+  return result.some((segment, index) => segment !== segments[index]) ? result : segments
 }
 
 function overlaysAfterInsertion(overlays: Overlay[], point: number, duration: number): Overlay[] {
@@ -297,6 +312,16 @@ export function deletionRange(session: EditSession): [number, number] | null {
   const nextIndex = marks.findIndex((mark) => session.playhead <= mark)
   if (nextIndex < 0) return [marks.at(-1) ?? 0, duration]
   return [marks[nextIndex - 1] ?? 0, marks[nextIndex] ?? duration]
+}
+
+export type MarkSide = 'left' | 'right'
+
+/** Return the saved mark at the currently highlighted partition boundary. */
+export function markAtBoundary(session: EditSession, side: MarkSide): number | undefined {
+  const range = deletionRange(session)
+  if (!range) return undefined
+  const boundary = side === 'left' ? range[0] : range[1]
+  return session.marks.find((mark) => Math.abs(mark - boundary) <= EPSILON)
 }
 
 export function marksAfterRemoval(

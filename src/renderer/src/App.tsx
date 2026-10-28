@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { aiTargetFps, aiTargetLongEdge, type AiEnhancementOptions, type EditSession, type FaceBlurSettings } from '@shared/types'
+import { upscaleTargetFps, upscaleTargetLongEdge, type UpscaleOptions, type EditSession, type FaceBlurSettings } from '@shared/types'
 import './components/video-picker.css'
 import { EditorWorkspace, GpuWarning, StatusBanners, Welcome } from './components/AppLayout'
 import { ExportProgress } from './components/ExportProgress'
 import { ConfirmDialog } from './components/ConfirmDialog'
-import { AiExportDialog } from './components/AiExportDialog'
+import { UpscaleDialog } from './components/UpscaleDialog'
 import { VideoPicker } from './components/VideoPicker'
 import { useEditorStore } from './model/store'
 import { useVideoPickerStore } from './model/video-picker'
@@ -35,10 +35,10 @@ function exportWasCancelled(error: unknown): boolean {
   return message.toLowerCase().includes('cancelled')
 }
 
-const defaultAiCanvas = {
-  width: aiTargetLongEdge,
-  height: Math.round(aiTargetLongEdge * 9 / 16),
-  fps: aiTargetFps,
+const defaultUpscaleCanvas = {
+  width: upscaleTargetLongEdge,
+  height: Math.round(upscaleTargetLongEdge * 9 / 16),
+  fps: upscaleTargetFps,
   fit: 'contain' as const
 }
 
@@ -115,7 +115,7 @@ export default function App(): React.JSX.Element {
     const removeJobListener = window.otc.onJobProgress(store.setJob)
     const removeOpenListener = window.otc.onOpenPath((path) => void store.loadVideo(path))
     const removeResetListener = window.otc.onResetProject(() => {
-      if (resetBlockedRef.current || resetDialogOpenRef.current) return
+      if (resetBlockedRef.current || resetDialogOpenRef.current || document.querySelector('[data-narration-busy="true"]')) return
       setPlaying(false)
       setSelectedFaceBlurId(null)
       setResetDialogOpen(true)
@@ -136,6 +136,7 @@ export default function App(): React.JSX.Element {
   }, [])
 
   const onKeyDown = useCallback((event: KeyboardEvent): void => {
+    if (document.querySelector('[data-narration-busy="true"]')) return
     if (resetDialogOpen || exportDialogOpen || pickerOpen) return
     if (exporting || previewActive || ignoresShortcut(event)) return
     const currentStore = useEditorStore.getState()
@@ -189,7 +190,7 @@ export default function App(): React.JSX.Element {
 
   const runExport = async (
     current: EditSession,
-    aiEnhance?: AiEnhancementOptions,
+    upscale?: UpscaleOptions,
     requestedOutputPath?: string
   ): Promise<void> => {
     try {
@@ -203,7 +204,7 @@ export default function App(): React.JSX.Element {
       const saved = await saveCurrentSession()
       if (saved) {
         const request = await prepareExportRequest(saved, outputPath)
-        const exportRequest = aiEnhance ? { ...request, aiEnhance } : request
+        const exportRequest = upscale ? { ...request, upscale } : request
         await window.otc.exportVideo(exportRequest)
       }
     } catch (error) {
@@ -240,13 +241,13 @@ export default function App(): React.JSX.Element {
         title={facePreview.rendering ? 'Applying face blur' : undefined}
         onCancel={facePreview.rendering ? facePreview.invalidate : undefined}
       />
-      <AiExportDialog
+      <UpscaleDialog
         open={exportDialogOpen}
-        canvas={session?.canvas ?? defaultAiCanvas}
+        canvas={session?.canvas ?? defaultUpscaleCanvas}
         focusZooms={session?.focusZooms}
         timeline={session ?? undefined}
         defaultOutputName={session ? exportName(primarySource(session).metadata.name) : undefined}
-        getAiPackStatus={window.otc.aiPackStatus}
+        getUpscalePackStatus={window.otc.upscalePackStatus}
         onBrowse={() => session
           ? window.otc.chooseExportPath(exportName(primarySource(session).metadata.name))
           : Promise.resolve(null)}
@@ -254,9 +255,9 @@ export default function App(): React.JSX.Element {
         cancelModelDownload={cancelModelDownload}
         subscribeModelDownload={window.otc.subscribeModelDownload}
         onCancel={() => setExportDialogOpen(false)}
-        onStart={(aiEnhance, outputPath) => {
+        onStart={(upscale, outputPath) => {
           setExportDialogOpen(false)
-          if (session) void runExport(session, aiEnhance, outputPath)
+          if (session) void runExport(session, upscale, outputPath)
         }}
       />
       <ConfirmDialog

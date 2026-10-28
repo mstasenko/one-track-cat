@@ -22,7 +22,7 @@ export interface AssetMetadata {
 
 export const transitionEffects = [
   'fade', 'dissolve', 'wipeleft', 'wiperight', 'slideleft',
-  'slideright', 'circleopen', 'zoomin', 'hblur'
+  'slideright', 'circleopen', 'zoomin', 'hblur', 'spin'
 ] as const
 
 export type TransitionEffect = typeof transitionEffects[number]
@@ -41,6 +41,7 @@ export const audioFadeDurations = [0, 0.1, 0.25, 0.5, 1] as const
 export const gameAudioLevels = [0.5, 0.3, 0.15] as const
 export type VideoSpeed = typeof videoSpeeds[number]
 export type FocusZoomAmount = typeof focusZoomAmounts[number]
+export type FocusZoomMode = 'frame' | 'circle'
 export type FreezeDuration = typeof freezeDurations[number]
 export type TextAnimationPreset = typeof textAnimationPresets[number]
 export type MediaAnimationPreset = TextAnimationPreset
@@ -58,6 +59,7 @@ export interface FocusZoomEffect {
   start: number
   duration: number
   transitionDuration?: number
+  mode?: FocusZoomMode
   zoom: FocusZoomAmount
   focusX: number
   focusY: number
@@ -159,13 +161,13 @@ export interface ProjectCanvas {
   shortFramePosition?: number
 }
 
-export const aiTargetLongEdge = 3840
-export const aiTargetFps = 60
-export type AiEnhancementMode = 'turbo' | 'base'
+export const upscaleTargetLongEdge = 3840
+export const upscaleTargetFps = 60
+export type UpscaleMode = 'turbo' | 'base'
 
 /** Export-only AI work selected by the user; the actual needs are bounded by the canvas. */
-export interface AiEnhancementOptions {
-  mode?: AiEnhancementMode
+export interface UpscaleOptions {
+  mode?: UpscaleMode
 }
 
 interface OverlayBase {
@@ -186,6 +188,8 @@ export interface VisualOverlayBase extends OverlayBase {
 
 export interface TextOverlay extends VisualOverlayBase {
   type: 'text'
+  /** Re-voice revision ID: captions keep their link when the audio is split by a cut. */
+  narrationId?: string
   text: string
   fontFamily: string
   fontSize: number
@@ -249,10 +253,24 @@ interface VideoOverlay extends VisualOverlayBase, AudioOverlaySettings {
   sourceDuration: number
 }
 
-interface AudioOverlay extends OverlayBase, AudioOverlaySettings {
+export interface AudioOverlay extends OverlayBase, AudioOverlaySettings {
   type: 'audio'
   path: string
   sourceIn: number
+  narration?: {
+    draftId: string
+    enabled: boolean
+    invalidated?: boolean
+    revisions?: string[]
+    originals?: string[]
+    /** Source-relative window owning edited transcript arrays; survives later cuts. */
+    transcriptRange?: [number, number]
+    voiceStyle?: import('./narration-api').NarrationVoiceStyle
+    levelVoice?: boolean
+    backgroundVolume?: number
+    slowdown?: number
+    subtitles?: boolean
+  }
 }
 
 export type Overlay = TextOverlay | ImageOverlay | GifOverlay | VideoOverlay | AudioOverlay
@@ -282,7 +300,7 @@ export interface ExportRequest {
   videoTransitions?: VideoRangeTransition[]
   shortFramePoints?: ShortFramePoint[]
   /** Export-only AI upscaling/interpolation; never persisted as a project edit. */
-  aiEnhance?: AiEnhancementOptions
+  upscale?: UpscaleOptions
 }
 
 export interface FacePreviewRequest extends ExportRequest {
@@ -318,7 +336,7 @@ export interface SavedSession extends SavedSessionSnapshot {
 
 export type JobKind = 'proxy' | 'export'
 
-export type JobPhase = 'queued' | 'starting' | 'preparing' | 'masking' | 'enhancing' | 'encoding' | 'finalizing' | 'complete'
+export type JobPhase = 'queued' | 'starting' | 'preparing' | 'masking' | 'upscaling' | 'encoding' | 'finalizing' | 'complete'
 export type HardwareLabel = 'CPU' | 'iGPU' | 'dGPU'
 
 export interface JobProgress {
@@ -350,15 +368,15 @@ export interface FacePackStatus {
   message: string
 }
 
-export interface AiPackStatus extends FacePackStatus {
+export interface UpscalePackStatus extends FacePackStatus {
   downloadable?: boolean
   downloadBytes?: number
 }
 
-export type AiModelDownloadPhase = 'downloading' | 'verifying' | 'preparing'
+export type UpscaleModelDownloadPhase = 'downloading' | 'verifying' | 'preparing'
 
-export interface AiModelDownloadProgress {
-  phase: AiModelDownloadPhase
+export interface UpscaleModelDownloadProgress {
+  phase: UpscaleModelDownloadPhase
   name: string
   downloadedBytes: number
   totalBytes: number
@@ -368,6 +386,7 @@ export interface AiModelDownloadProgress {
 }
 
 export interface otcApi {
+  narration?: import('./narration-api').NarrationApi
   openVideo: () => Promise<string | null>
   openVideoPath: (path: string) => Promise<string | VideoDirectory>
   listVideoDirectory: (directory?: string) => Promise<VideoDirectory>
@@ -389,10 +408,10 @@ export interface otcApi {
   getGpuDiagnostics: () => Promise<GpuDiagnostics>
   facePackStatus: () => Promise<FacePackStatus>
   clearFaceCache: () => Promise<void>
-  aiPackStatus: (spatial?: boolean, mode?: AiEnhancementMode) => Promise<AiPackStatus>
-  startModelDownload?: (mode?: AiEnhancementMode) => Promise<void>
+  upscalePackStatus: (spatial?: boolean, mode?: UpscaleMode) => Promise<UpscalePackStatus>
+  startModelDownload?: (mode?: UpscaleMode) => Promise<void>
   cancelModelDownload?: () => Promise<boolean>
-  subscribeModelDownload?: (callback: (progress: AiModelDownloadProgress) => void) => () => void
+  subscribeModelDownload?: (callback: (progress: UpscaleModelDownloadProgress) => void) => () => void
   previewFaces: (request: FacePreviewRequest) => Promise<string>
   restoreFacePreview: (request: ExportRequest) => Promise<FacePreviewResult[]>
   getPathUrl: (path: string) => Promise<string>

@@ -1,19 +1,52 @@
-import type { FocusZoomEffect } from './types'
+import type { FocusZoomEffect, ProjectCanvas } from './types'
 
 export const focusZoomDefaultTransitionDuration = 0.5
 export const focusZoomMinTransitionDuration = 0.05
 export const focusZoomMaxTransitionDuration = 5
 
-/** Return a valid transition length, capped so the in/out ramps cannot overlap. */
-export function focusZoomTransitionDuration(effect: Pick<FocusZoomEffect, 'duration' | 'transitionDuration'>): number {
+export interface FocusCircleGeometry {
+  /** Output-space top-left of the circle. */
+  x: number
+  /** Output-space top-left y-coordinate of the circle. */
+  y: number
+  size: number
+  borderWidth: number
+}
+
+function boundedTransitionDuration(effect: Pick<FocusZoomEffect, 'transitionDuration'>): number {
   const requested = typeof effect.transitionDuration === 'number' && Number.isFinite(effect.transitionDuration)
     ? effect.transitionDuration
     : focusZoomDefaultTransitionDuration
-  const bounded = Math.min(
-    focusZoomMaxTransitionDuration,
-    Math.max(focusZoomMinTransitionDuration, requested)
-  )
-  return Math.min(bounded, Math.max(0, effect.duration) / 2)
+  return Math.min(focusZoomMaxTransitionDuration, Math.max(focusZoomMinTransitionDuration, requested))
+}
+
+/** Resolve the circular highlight and its outline width in canvas pixels. */
+export function focusCircleGeometry(
+  effect: Pick<FocusZoomEffect, 'focusX' | 'focusY' | 'zoom'>,
+  canvas: Pick<ProjectCanvas, 'width' | 'height'>
+): FocusCircleGeometry {
+  const shortEdge = Math.min(canvas.width, canvas.height)
+  // Preserve the existing 2× circle while higher factors highlight smaller areas.
+  const size = shortEdge * 0.88 / effect.zoom
+  const radius = size / 2
+  const centerX = Math.max(radius, Math.min(canvas.width - radius, effect.focusX * canvas.width))
+  const centerY = Math.max(radius, Math.min(canvas.height - radius, effect.focusY * canvas.height))
+  return {
+    x: centerX - radius,
+    y: centerY - radius,
+    size,
+    borderWidth: Math.max(2, size * 0.025)
+  }
+}
+
+/** Circle outline draw time; unlike frame zoom ramps it may span the full effect. */
+export function circleDrawDuration(effect: Pick<FocusZoomEffect, 'duration' | 'transitionDuration'>): number {
+  return Math.min(Math.max(0, effect.duration), boundedTransitionDuration(effect))
+}
+
+/** Return a valid transition length, capped so the in/out ramps cannot overlap. */
+export function focusZoomTransitionDuration(effect: Pick<FocusZoomEffect, 'duration' | 'transitionDuration'>): number {
+  return Math.min(boundedTransitionDuration(effect), Math.max(0, effect.duration) / 2)
 }
 
 export function smoothstep(value: number): number {

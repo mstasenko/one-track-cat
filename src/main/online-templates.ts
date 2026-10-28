@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { lstat, mkdir, rename, rm, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, readdir, rename, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { AssetItem } from '../types'
 import type { OnlineTemplate, TemplateCategory, TemplateSource } from '../online-templates'
@@ -28,6 +28,12 @@ const HF_PAGE_SIZE = 100
 const HF_CATALOG_LIMIT = 1000
 const MEMEFACT_CONTEXT_LIMIT = 8192
 const acceptedWikimediaLicenses = new Set(['cc0', 'cc0 1.0'])
+const templateExtensions = '(?:jpg|jpeg|png|webp|gif|mp4|mp3|ogg|oga|wav|flac|m4a|aac)'
+const templateStem = '(?:(?:memefact|imgflip|wikimedia)-[0-9]{1,12}|imkg-[0-9a-z]{1,12})'
+const templateFilePattern = new RegExp(`^${templateStem}\\.${templateExtensions}$`)
+const templateUuid = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+const templateTemporaryPattern = new RegExp(`^\\.${templateStem}\\.${templateExtensions}\\.${templateUuid}\\.tmp$`)
+const templateImportCancelledMessage = 'Template import cancelled while clearing its cache'
 
 interface MemeFactEntry {
   template: OnlineTemplate
@@ -38,6 +44,9 @@ const catalogPromises: Partial<Record<TemplateCategory, Promise<OnlineTemplate[]
 const wikimediaPromises = new Map<string, Promise<OnlineTemplate[]>>()
 let memefactCatalogPromise: Promise<MemeFactEntry[]> | undefined
 const knownTemplates = new Map<string, OnlineTemplate>()
+const activeTemplateImports = new Set<Promise<unknown>>()
+let templateCacheGeneration = 0
+let templateCacheClear: Promise<void> | undefined
 
 function isRecord(value: unknown): value is RecordValue {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -386,11 +395,45 @@ async function removeTemporary(path: string): Promise<void> {
   }
 }
 
-export async function importTemplate(
+function assertTemplateCacheGeneration(generation: number): void {
+  if (generation !== templateCacheGeneration) throw new Error(templateImportCancelledMessage)
+}
+
+/** Remove only files this module generated under the app-owned template cache. */
+export async function clearOnlineTemplateCache(userDataDirectory: string): Promise<void> {
+  if (templateCacheClear) return templateCacheClear
+  const task = (async () => {
+    templateCacheGeneration += 1
+    await Promise.allSettled([...activeTemplateImports])
+    if (typeof userDataDirectory !== 'string' || userDataDirectory.length === 0) return
+    const directory = join(userDataDirectory, 'online-templates')
+    try {
+      const info = await lstat(directory)
+      if (!info.isDirectory()) return
+      const entries = await readdir(directory, { withFileTypes: true })
+      const generated = entries
+        .filter((entry) => entry.isFile() && (templateFilePattern.test(entry.name) || templateTemporaryPattern.test(entry.name)))
+        .map((entry) => join(directory, entry.name))
+      await Promise.all(generated.map((path) => rm(path, { force: true }).catch(() => undefined)))
+    } catch {
+      // A missing or inaccessible cache is already clear from this process's perspective.
+    }
+  })()
+  templateCacheClear = task
+  try {
+    await task
+  } finally {
+    if (templateCacheClear === task) templateCacheClear = undefined
+  }
+}
+
+async function importTemplateAtGeneration(
   source: unknown,
   id: unknown,
-  directory: string
+  directory: string,
+  generation: number
 ): Promise<AssetItem> {
+  assertTemplateCacheGeneration(generation)
   if (!isSource(source)) throw new Error('Template source is unsupported')
   const normalizedId = requiredId(source, id)
   if (typeof directory !== 'string' || directory.length === 0) throw new Error('Template directory is required')
@@ -398,6 +441,7 @@ export async function importTemplate(
   // electron-vite's ESM shim scanner treats a trailing bare "import" as syntax.
   if (!item) throw new Error('Search for the template before adding it')
   await mkdir(directory, { recursive: true })
+  assertTemplateCacheGeneration(generation)
   const outputPath = join(directory, mediaFilename(item))
   const before = await destinationState(outputPath)
   if (before === 'cached') return assetFor(item, outputPath)
@@ -405,8 +449,10 @@ export async function importTemplate(
   const temporaryPath = join(directory, `.${mediaFilename(item)}.${randomUUID()}.tmp`)
   try {
     const bytes = await requestBody(item.url, MEDIA_BODY_LIMIT, mediaResponseValidator(item))
+    assertTemplateCacheGeneration(generation)
     if (bytes.byteLength === 0) throw new Error('Downloaded media is empty')
     await writeFile(temporaryPath, bytes, { flag: 'wx', mode: 0o644 })
+    assertTemplateCacheGeneration(generation)
     const after = await destinationState(outputPath)
     if (after !== 'missing') {
       if (after === 'cached') {
@@ -420,6 +466,22 @@ export async function importTemplate(
   } catch (error) {
     await removeTemporary(temporaryPath)
     throw error
+  }
+}
+
+export async function importTemplate(
+  source: unknown,
+  id: unknown,
+  directory: string
+): Promise<AssetItem> {
+  if (templateCacheClear) throw new Error(templateImportCancelledMessage)
+  const generation = templateCacheGeneration
+  const pending = importTemplateAtGeneration(source, id, directory, generation)
+  activeTemplateImports.add(pending)
+  try {
+    return await pending
+  } finally {
+    activeTemplateImports.delete(pending)
   }
 }
 

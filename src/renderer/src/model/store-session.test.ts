@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import type { MediaMetadata } from '@shared/types'
 import { defaultTextOverlay, createSession } from './timeline'
-import { patchedOverlaySession } from './store-session'
+import { useEditorStore } from './store'
+import { patchedOverlaySession, restoredEditorState, savedSession } from './store-session'
 
 const metadata: MediaMetadata = {
   path: '/source.mp4', name: 'source.mp4', size: 100, modifiedAt: 1, duration: 10,
@@ -22,6 +23,30 @@ describe('overlay session patches', () => {
 
     expect(patchedOverlaySession(session, target.id, { start: -1 })).toBe(session)
     expect(patchedOverlaySession(session, 'missing-overlay', { text: 'ignored' })).toBe(session)
+  })
+
+  it('keeps generated subtitles unselectable and immutable through ordinary editing', () => {
+    const session = sessionWithOverlays()
+    const caption = { ...defaultTextOverlay(0, 3), narrationId: 'draft-1' }
+    session.overlays.push(caption)
+    session.selectedOverlayId = session.overlays[0]?.id ?? null
+    useEditorStore.setState({ session, history: [], future: [] })
+    useEditorStore.getState().selectOverlay(caption.id)
+    expect(useEditorStore.getState().session?.selectedOverlayId).toBe(session.selectedOverlayId)
+    expect(patchedOverlaySession(session, caption.id, { text: 'Changed', start: 2 })).toBe(session)
+  })
+
+  it('clears saved subtitle selections in the project and Undo/Redo snapshots', async () => {
+    const session = sessionWithOverlays()
+    const caption = { ...defaultTextOverlay(0, 3), narrationId: 'draft-1' }
+    session.overlays.push(caption)
+    session.selectedOverlayId = caption.id
+    Object.defineProperty(window, 'otc', { configurable: true,
+      value: { getPathUrl: (path: string) => Promise.resolve(`media:${path}`) } })
+    const restored = await restoredEditorState(savedSession(session, [session], [session]))
+    expect([restored.session, ...restored.history, ...restored.future].map((snapshot) => snapshot.selectedOverlayId))
+      .toEqual([null, null, null])
+    expect(restored.session.overlays).toContainEqual(caption)
   })
 
   it('copies only the edited overlay and retains unrelated identity', () => {

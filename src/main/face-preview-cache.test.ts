@@ -62,6 +62,18 @@ afterEach(async () => {
 })
 
 describe('completed face preview cache', () => {
+  it('keys downloaded models by their catalog before and after first-use installation', async () => {
+    const catalog = join(directory, 'sources.json')
+    await writeFile(catalog, 'pinned models v1')
+    mocks.requireFacePack.mockResolvedValue({ executable: join(directory, 'otc-face-blur'), catalog })
+    const key = await snapshotFacePreview(request)
+    expect(key).toBeTruthy()
+    await rm(join(directory, 'model.bin'))
+    await rm(join(directory, 'model.xml'))
+    expect(await snapshotFacePreview(request)).toBe(key)
+    await writeFile(catalog, 'pinned models v2')
+    expect(await snapshotFacePreview(request)).not.toBe(key)
+  })
   it('keys legacy close-ups by their effective ramp duration', async () => {
     const effect = { id: 'zoom', start: 0, duration: 1, zoom: 2 as const, focusX: 0.5, focusY: 0.5 }
     const key = await snapshotFacePreview({ ...request, focusZooms: [effect] })

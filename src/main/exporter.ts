@@ -1,7 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { mkdir, mkdtemp, rename, rm } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { focusZoomTransitionDuration, smoothstepExpression } from '../focus-zoom'
 import type { ExportRequest, Overlay, SourceSegment, VisualOverlayBase } from '../types'
 import { exportEncoders, integratedDecodeDevice, softwareEncoder } from './export-encoder'
 import { ensureDiskSpace, ensureFaceExportDiskSpace } from './export-space'
@@ -12,17 +11,23 @@ import { segmentOutputDuration, segmentPlaybackRate, timelineDuration } from '..
 import { overlayFit } from '../overlay-fit'
 import { encodeWithFaces } from './face-export'
 import { tryReuseFacePreview } from './face-preview-cache'
-import { restrictedIntelRenderNode } from './face-worker'
+import { restrictedIntelRenderNode } from './intel-device'
 import { encodeWithPrivilegedGpu } from './privileged-export'
 import { clippedFaceRequest, previewFilterGraph, type PreviewRange } from './preview-range'
 import { applyPreviewSeek, prepareTimelineInputs, preparePreviewSeek, type PreviewSeekPlan } from './preview-seek'
-import { addVideoRangeTransitionFilters } from './video-range-transition'
+import { addClipDissolveFilter, addVideoRangeTransitionFilters, clipFadeFilter } from './video-range-transition'
 import { frameAlphaFilter } from './frame-alpha'
-import { requireAiPack } from './ai-pack'
-import { encodeWithAi, type AiExportContext } from './ai-export'
+import { requireUpscalePack } from './upscale-pack'
+import { encodeWithUpscale, type UpscaleExportContext } from './upscale-export'
 import { isShortCanvas, shortFramePositionExpression } from '../short-frame'
-import { aiEnhancementPlan, flashSpatialSupportMessage, isFlashSpatialSupported } from '../ai-enhancement'
-import { overlayInputArgs } from './export-inputs'
+import { upscalePlan, upscaleRenderRequest, flashSpatialSupportMessage, isFlashSpatialSupported } from '../upscale'
+import { overlayInputArgs, stillFrameFilter } from './export-inputs'
+import { audioTempoFilter, segmentAudioEnvelope } from './segment-audio'
+import { narrationCopyArgs } from './narration-copy'
+import { ffmpegPath } from './binaries'
+import { spinTransitionFilters } from '../spin-transition'
+import { addFocusZoomFilters } from './focus-zoom'
+import { prepareFfmpegArguments } from './ffmpeg-arguments'
 export { loopsInput } from './export-inputs'
 
 export { prepareTimelineInputs } from './preview-seek'
@@ -38,35 +43,6 @@ interface PreparedInput {
 function seconds(value: number): string {
   return Math.max(0, value).toFixed(6)
 }
-
-function focusZoomExpression(request: ExportRequest): { zoom: string; x: string; y: string } | null {
-  const effects = request.focusZooms ?? []
-  if (effects.length === 0) return null
-  const time = `on/${request.canvas.fps}`
-  let zoom = '1'
-  let x = '0'
-  let y = '0'
-  for (const effect of [...effects].reverse()) {
-    const end = effect.start + effect.duration
-    const ramp = focusZoomTransitionDuration(effect)
-    const local = `((${time})-${seconds(effect.start)})`
-    const easedIn = smoothstepExpression(`${local}/${seconds(ramp)}`)
-    const easedOut = smoothstepExpression(`(${local}-${seconds(effect.duration - ramp)})/${seconds(ramp)}`)
-    const activeZoom = `(1+${effect.zoom - 1}*${easedIn}*(1-${easedOut}))`
-    const active = `between(${time},${seconds(effect.start)},${seconds(end)})`
-    zoom = `if(${active},${activeZoom},${zoom})`
-    x = `if(${active},max(0,min(iw-iw/zoom,${effect.focusX}*iw-iw/(2*zoom))),${x})`
-    y = `if(${active},max(0,min(ih-ih/zoom,${effect.focusY}*ih-ih/(2*zoom))),${y})`
-  }
-  return { zoom, x, y }
-}
-
-function audioTempoFilter(rate: number): string {
-  if (rate === 1) return 'anull'
-  const factors = rate === 0.25 ? [0.5, 0.5] : rate === 4 ? [2, 2] : [rate]
-  return factors.map((factor) => `atempo=${factor}`).join(',')
-}
-
 
 function visualGeometry(overlay: VisualOverlayBase, width: number, height: number): {
   width: number
@@ -90,20 +66,13 @@ export function buildFilterGraph(request: ExportRequest, inputs: PreparedInput[]
   const filters: string[] = []
   const { videoSegments, audioSegments } = addSegmentFilters(filters, request)
   addBaseFilters(filters, videoSegments, audioSegments, request)
-  const cameraLabel = addFocusZoomFilters(filters, request)
+  const dissolvedLabel = addClipDissolveFilter(filters, request, 'basev')
+  const cameraLabel = addFocusZoomFilters(filters, request, dissolvedLabel)
   const transitionedLabel = addVideoRangeTransitionFilters(filters, request, cameraLabel)
   const videoLabel = addVisualFilters(filters, inputs, request, transitionedLabel)
   const duration = timelineDuration(request.segments)
   addAudioOverlayFilters(filters, inputs, duration)
   return { graph: filters.join(';'), videoLabel, audioLabel: 'aout' }
-}
-
-function addFocusZoomFilters(filters: string[], request: ExportRequest): string {
-  const expression = focusZoomExpression(request)
-  if (!expression) return 'basev'
-  const { width, height, fps } = request.canvas
-  filters.push(`[basev]zoompan=z='${expression.zoom}':x='${expression.x}':y='${expression.y}':d=1:s=${width}x${height}:fps=${fps}[camera]`)
-  return 'camera'
 }
 
 function addSegmentFilters(filters: string[], request: ExportRequest): {
@@ -148,11 +117,7 @@ function addSegmentFilter(filters: string[], request: ExportRequest, segment: So
     videoSegments.push(`[vseg${index}]`)
     const fadeIn = index > 0
     const fadeOut = Boolean(next)
-    const deClick = Math.min(0.01, segmentDuration / 2)
-    const deClickFilters = deClick > 0
-      ? (fadeIn ? `,afade=t=in:st=0:d=${seconds(deClick)}` : '') +
-        (fadeOut ? `,afade=t=out:st=${seconds(segmentDuration - deClick)}:d=${seconds(deClick)}` : '')
-      : ''
+    const deClickFilters = segmentAudioEnvelope(segmentDuration, fadeIn, fadeOut)
     if (source.hasAudio) {
       filters.push(
         `[${inputIndex}:a:0]atrim=start=${seconds(segment.sourceStart)}:end=${seconds(segment.sourceEnd)},` +
@@ -214,9 +179,6 @@ function addVideoBaseFilters(
     const joinedLabel = `[vjoin${index}]`
     if (segment.kind !== 'freeze' && segment.transition) {
       const duration = segment.transition.duration
-      const transition = segment.transition.effect === 'fade'
-        ? "custom:expr='A*(P*P*(3-2*P))+B*(1-P*P*(3-2*P))'"
-        : segment.transition.effect
       const prefix = `vprefix${index}`
       const outgoing = `voutgoing${index}`
       const mixed = `vmixed${index}`
@@ -251,8 +213,13 @@ function addVideoBaseFilters(
       } else {
         filters.push(`${nextLabel}trim=duration=${seconds(duration)},${resetVideoTimestamps},fps=${request.canvas.fps}${trimmedIncomingHeadLabel}`)
       }
-      filters.push(
-        `${trimmedOutgoingLabel}${trimmedIncomingHeadLabel}xfade=transition=${transition}:` +
+      if (segment.transition.effect === 'spin') filters.push(...spinTransitionFilters(trimmedOutgoingLabel,
+        trimmedIncomingHeadLabel, outgoing, incomingHead, mixedLabel, request.canvas.fps, duration, request.canvas.width, request.canvas.height))
+      else if (segment.transition.effect === 'fade' || segment.transition.effect === 'dissolve') filters.push(
+        `${trimmedOutgoingLabel}${trimmedIncomingHeadLabel}${clipFadeFilter(`vfade${index}`, duration, request.canvas.fps, segment.transition.effect)}${mixedLabel}`
+      )
+      else filters.push(
+        `${trimmedOutgoingLabel}${trimmedIncomingHeadLabel}xfade=transition=${segment.transition.effect}:` +
         `duration=${seconds(duration)}:offset=0${mixedLabel}`
       )
       const concatInputs = hasRemainder
@@ -296,10 +263,11 @@ function visualFilter(
   const trim = 'sourceIn' in overlay
     ? `trim=start=${seconds(overlay.sourceIn)}:end=${seconds(overlay.sourceIn + overlay.duration)}`
     : `trim=duration=${seconds(overlay.duration)}`
+  const still = overlay.type === 'image' ? `${stillFrameFilter(overlay.duration)},` : ''
   // Coarse source timebases otherwise round fractional starts and drop the last overlay frame.
   // Hold the decoded final frame until the overlay's exclusive timeline end, not decoder EOF.
   filters.push(
-    `[${index}:v:0]${trim},settb=AVTB,setpts=PTS-STARTPTS+${seconds(overlay.start)}/TB,` +
+    `[${index}:v:0]${still}${trim},settb=AVTB,setpts=PTS-STARTPTS+${seconds(overlay.start)}/TB,` +
     `${scale},${animation.filter}[ov${order}]`,
     `[${inputLabel}][ov${order}]overlay=${animation.position}:` +
     `eof_action=repeat:repeatlast=1:enable='gte(t,${seconds(overlay.start)})*lt(t,${seconds(overlay.start + overlay.duration)})'` +
@@ -313,7 +281,7 @@ function visualAnimationFilter(
   bounds: { x: number; y: number; width: number; height: number },
   order: number
 ): { filter: string; position: string } {
-  const unchanged = { filter: `colorchannelmixer=aa=${overlay.opacity}`, position: `x=${bounds.x}:y=${bounds.y}` }
+  const unchanged = { filter: frameAlphaFilter(`visualalpha${order}`, overlay.opacity, '1'), position: `x=${bounds.x}:y=${bounds.y}` }
   if (overlay.type === 'gif') return unchanged
   if (!overlay.animation || overlay.animation === 'none') return unchanged
   // Crop/fit first, then animate around the same center as the preview's content transform.
@@ -352,35 +320,36 @@ function addVisualFilters(filters: string[], inputs: PreparedInput[], request: E
 
 export async function exportVideo(request: ExportRequest, range?: PreviewRange): Promise<void> {
   if (request.segments.length === 0) throw new Error('The timeline is empty')
-  let aiContext: AiExportContext | undefined
-  if (request.aiEnhance) {
-    if (range) throw new Error('AI enhancement applies to the whole export, not a preview range')
-    const plan = aiEnhancementPlan(request.canvas, request.aiEnhance.mode, request.focusZooms, request)
+  let upscaleContext: UpscaleExportContext | undefined
+  if (request.upscale) {
+    if (range) throw new Error('Upscaling applies to the whole export, not a preview range')
+    const plan = upscalePlan(request.canvas, request.upscale.mode, request.focusZooms, request)
     if (!isFlashSpatialSupported(plan)) throw new Error(flashSpatialSupportMessage)
-    const pack = await requireAiPack({ spatial: plan.spatial, ...(plan.spatial ? { mode: plan.mode } : {}) })
-    aiContext = { plan, pack }
+    const pack = await requireUpscalePack({ spatial: plan.spatial, ...(plan.spatial ? { mode: plan.mode } : {}) })
+    upscaleContext = { plan, pack }
   }
   const outputDirectory = dirname(request.outputPath)
   await mkdir(outputDirectory, { recursive: true })
   await ensureDiskSpace(request)
   const temporaryDirectory = await mkdtemp(join(outputDirectory, '.otc-export-'))
   const temporaryOutput = join(outputDirectory, `.${randomUUID()}.otc.mp4`)
-  const duration = range ? range[1] - range[0] : timelineDuration(request.segments)
-  const jobId = randomUUID()
-
   try {
-    const reused = range || request.aiEnhance ? false : await tryReuseFacePreview(request, temporaryOutput, jobId, duration)
+    const duration = range ? range[1] - range[0] : timelineDuration(request.segments)
+    const jobId = randomUUID()
+    const copy = range ? null : narrationCopyArgs(request, temporaryOutput)
+    if (copy) await jobs.run(ffmpegPath(), await prepareFfmpegArguments(copy, temporaryDirectory), 'export', duration, jobId, 'Keeping original video; replacing narration', { phase: 'encoding', hardwareLabel: 'CPU' })
+    const reused = copy ? true : range || request.upscale ? false : await tryReuseFacePreview(request, temporaryOutput, jobId, duration)
     if (!reused) {
       const workerRequest = clippedFaceRequest(request, range)
-      if (request.aiEnhance || workerRequest.faceBlurs?.length) await ensureFaceExportDiskSpace(request, temporaryDirectory)
-      await encodeVideo(request, temporaryDirectory, temporaryOutput, duration, jobId, range, aiContext)
+      if (request.upscale || workerRequest.faceBlurs?.length) await ensureFaceExportDiskSpace(request, temporaryDirectory)
+      await encodeVideo(request, temporaryDirectory, temporaryOutput, duration, jobId, range, upscaleContext)
     }
     await rename(temporaryOutput, request.outputPath)
   } catch (error) {
-    await rm(temporaryOutput, { force: true })
+    await rm(temporaryOutput, { force: true }).catch(() => undefined)
     throw error
   } finally {
-    await rm(temporaryDirectory, { recursive: true, force: true })
+    await rm(temporaryDirectory, { recursive: true, force: true }).catch(() => undefined)
   }
 }
 
@@ -425,15 +394,16 @@ async function encodeVideo(
   duration: number,
   jobId: string,
   range?: PreviewRange,
-  aiContext?: AiExportContext
+  upscaleContext?: UpscaleExportContext
 ): Promise<void> {
-  if (request.aiEnhance && !aiContext) {
-    throw new Error('AI enhancement context is missing')
+  if (request.upscale && !upscaleContext) {
+    throw new Error('Upscaling context is missing')
   }
+  if (upscaleContext) request = upscaleRenderRequest(request, upscaleContext.plan)
   const { inputArgs, preparedInputs, graphRequest, seek } = await prepareInputs(request, directory, range)
   const filter = previewFilterGraph(applyPreviewSeek(buildFilterGraph(graphRequest, preparedInputs), seek), range)
-  if (aiContext) {
-    await encodeWithAi(request, inputArgs, filter, directory, output, duration, jobId, aiContext)
+  if (upscaleContext) {
+    await encodeWithUpscale(request, inputArgs, filter, directory, output, duration, jobId, upscaleContext)
     return
   }
   const workerRequest = clippedFaceRequest(request, range)
@@ -454,7 +424,7 @@ async function encodeVideo(
     const encoder = softwareEncoder()
     const graph = encoderGraph(encoder, filter.graph, filter.videoLabel)
     await jobs.run(
-      encoder.executable, encoderArgs(encoder, inputArgs, filter, graph, duration, output),
+      encoder.executable, await prepareFfmpegArguments(encoderArgs(encoder, inputArgs, filter, graph, duration, output), directory),
       'export', duration, jobId, 'GPU authorization or encoding unavailable; using CPU',
       { phase: 'encoding', hardwareLabel: 'CPU' }
     )
@@ -465,7 +435,7 @@ async function encodeVideo(
     const graph = encoderGraph(encoder, filter.graph, filter.videoLabel)
     try {
       await jobs.run(
-        encoder.executable, encoderArgs(encoder, inputArgs, filter, graph, duration, output),
+        encoder.executable, await prepareFfmpegArguments(encoderArgs(encoder, inputArgs, filter, graph, duration, output), directory),
         'export', duration, jobId, '',
         { phase: 'encoding', hardwareLabel: encoder.hardwareLabel }
       )
@@ -473,7 +443,7 @@ async function encodeVideo(
     } catch (error) {
       if (!canRetryEncoding(error, index, encoders.length)) throw error
       // The probe cannot predict every real filter graph or driver failure.
-      await rm(output, { force: true })
+      await rm(output, { force: true }).catch(() => undefined)
     }
   }
 }

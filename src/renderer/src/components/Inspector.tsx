@@ -2,10 +2,13 @@ import { audioFadeDurations, gameAudioLevels, mediaAnimationPresets, textAnimati
 import type { MediaAnimationPreset, Overlay, TextAnimationPreset } from '@shared/types'
 import { formatTime } from '../model/timeline'
 import { NumberControl } from './NumberControl'
+import { NarrationPanel } from './NarrationPanel'
+import { useEditorStore } from '../model/store'
 
 const fonts = ['Anton', 'Bangers', 'Bebas Neue', 'Comic Neue', 'Lobster', 'Oswald', 'Permanent Marker', 'Roboto']
 
 interface InspectorProps {
+  onPause?: () => void
   overlay: Overlay | null
   maxDuration: number
   framesPerSecond: number
@@ -125,7 +128,9 @@ function DurationControl({
   return <NumberControl label="Visible for" value={overlay.duration} min={0.1} max={Math.max(0.1, maxDuration - overlay.start)} step={0.05} onChange={(duration) => onChange({ duration })} />
 }
 
-export function Inspector({ overlay, maxDuration, framesPerSecond, onBack, onChange, onRemove, onAnimation, onPreviewAnimation }: InspectorProps): React.JSX.Element {
+export function Inspector({ overlay, maxDuration, framesPerSecond, onBack, onChange, onRemove, onAnimation, onPreviewAnimation, onPause }: InspectorProps): React.JSX.Element {
+  const session = useEditorStore((state) => state.session)
+  if (overlay?.type === 'audio' && overlay.narration && session) return <NarrationPanel session={session} overlay={overlay} onBack={onBack} onPause={onPause} />
   if (!overlay) return <section className="inspector"><p className="empty-note">Select text, a picture, or a clip to edit it.</p></section>
   return (
     <section className="inspector">

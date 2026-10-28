@@ -26,7 +26,7 @@ const { mockStore, mockStoreHook, workspaceProps, saveCurrentSessionMock, autosa
     redo: vi.fn(),
     removeSelectedOverlay: vi.fn(),
     addMark: vi.fn(),
-    clearMarks: vi.fn(),
+    clearMark: vi.fn(),
     removeMarked: vi.fn(),
     applyFaceBlur: vi.fn(),
     updateFaceBlurSettings: vi.fn(),
@@ -85,7 +85,7 @@ function bridge(): void {
       getDroppedPath: vi.fn().mockResolvedValue('/dropped.mp4'),
       chooseExportPath: vi.fn().mockResolvedValue('/exported.mp4'),
       exportVideo: vi.fn().mockResolvedValue(undefined),
-      aiPackStatus: vi.fn().mockResolvedValue({ available: true, message: 'ready' }),
+      upscalePackStatus: vi.fn().mockResolvedValue({ available: true, message: 'ready' }),
       getSvgDataUrl: vi.fn().mockResolvedValue('svg')
     }
   })

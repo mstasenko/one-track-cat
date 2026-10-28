@@ -1,13 +1,41 @@
 import type { AudioFadeDuration, GameAudioLevel, Overlay } from './types'
+import { narrationSampleRate } from './narration'
 
 export const DUCK_ATTACK = 0.08
 export const DUCK_RELEASE = 0.18
 const AUDIBLE_EPSILON = 0.0001
 
 export type AudioEnabledOverlay = Extract<Overlay, { type: 'audio' | 'video' }>
+export const NARRATION_EDGE = 0.005
+
+/** Touching replacements share one mute envelope; their join must not reveal the original voice. */
+export function narrationReplacementRanges(overlays: Overlay[]): [number, number][] {
+  const ranges = overlays.flatMap((overlay): [number, number][] =>
+    overlay.type === 'audio' && overlay.narration?.enabled
+      ? [[overlay.start, overlay.start + overlay.duration]] : []).sort((left, right) => left[0] - right[0])
+  const merged: [number, number][] = []
+  for (const range of ranges) {
+    const previous = merged.at(-1)
+    if (previous && Math.round(range[0] * narrationSampleRate) <= Math.round(previous[1] * narrationSampleRate)) {
+      previous[1] = Math.max(previous[1], range[1])
+    } else merged.push([...range])
+  }
+  return merged
+}
+
+export function narrationGainAtLocalTime(duration: number, time: number): number {
+  return time < 0 || time >= duration ? 0 : smoothstep(Math.min(time, duration - time) / Math.min(NARRATION_EDGE, duration / 2))
+}
+
+export function previewOverlayGain(overlay: Overlay, outputTime: number): number | undefined {
+  if (!isAudioEnabledOverlay(overlay)) return undefined
+  const local = outputTime - overlay.start
+  if (overlay.type === 'audio' && overlay.narration) return narrationGainAtLocalTime(overlay.duration, local)
+  return overlay.volume * overlayGainAtLocalTime(overlay.duration, overlay.fadeIn, overlay.fadeOut, local)
+}
 
 export function isAudioEnabledOverlay(overlay: Overlay): overlay is AudioEnabledOverlay {
-  return overlay.type === 'audio' || (
+  return (overlay.type === 'audio' && overlay.narration?.enabled !== false) || (
     overlay.type === 'video' && overlay.hasAudio && overlay.audioEnabled
   )
 }
@@ -78,7 +106,10 @@ function duckGain(
 
 export function gameAudioGainAtOutputTime(overlays: Overlay[], outputTime: number): number {
   if (!Number.isFinite(outputTime)) return 1
+  const narrationGain = narrationReplacementRanges(overlays).reduce((gain, [start, end]) =>
+    Math.min(gain, 1 - narrationGainAtLocalTime(end - start, outputTime - start)), 1)
   return overlays.reduce((gain, overlay) => {
+    if (overlay.type === 'audio' && overlay.narration?.enabled) return gain
     if (!audibleDucker(overlay)) return gain
     return Math.min(gain, duckGain(
       overlay.start,
@@ -86,5 +117,5 @@ export function gameAudioGainAtOutputTime(overlays: Overlay[], outputTime: numbe
       overlay.gameAudioLevel ?? 0.3,
       outputTime
     ))
-  }, 1)
+  }, narrationGain)
 }

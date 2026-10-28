@@ -108,8 +108,10 @@ test('Zoom and freeze match hover preview', async () => {
     await page.setViewportSize({ width: 800, height: 600 })
     await expect(page.locator('.transport')).toHaveCSS('height', '40px')
     await expect(page.locator('.editor-column')).toHaveCSS('grid-template-rows', /.+ 98px/)
+    await expect(page.getByRole('button', { name: 'Clear left mark', exact: true })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Clear right mark', exact: true })).toBeVisible()
     const controls = page.locator('.transport').locator(':scope > *')
-    await expect(controls).toHaveCount(12)
+    await expect(controls).toHaveCount(13)
     const layout = await controls.evaluateAll((elements) => elements.map((element) => {
       const rect = element.getBoundingClientRect()
       return { center: rect.top + rect.height / 2, right: rect.right }

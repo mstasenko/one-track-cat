@@ -19,9 +19,9 @@ const request = {
 describe('face export disk-space guard', () => {
   beforeEach(() => vi.clearAllMocks())
 
-  it('reserves additional space for AI enhancement intermediates', () => {
+  it('reserves additional space for Upscaling intermediates', () => {
     const ordinary = estimatedExportBytes(request)
-    const enhanced = estimatedExportBytes({ ...request, aiEnhance: {} })
+    const enhanced = estimatedExportBytes({ ...request, upscale: {} })
 
     expect(enhanced).toBeGreaterThan(ordinary)
   })

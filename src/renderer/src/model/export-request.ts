@@ -1,6 +1,7 @@
 import type { EditSession, ExportRequest, ImageOverlay, Overlay } from '@shared/types'
 import { renderTextBitmap } from './text-render'
 import { fitVideoRangeTransition } from '@shared/video-range-transition'
+import { narrationSubtitleVisible } from './narration-subtitles'
 
 function loadedImage(url: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
@@ -45,7 +46,9 @@ async function prepareOverlay(overlay: Overlay, session: EditSession): Promise<O
 export async function prepareExportRequest(session: EditSession, outputPath: string): Promise<ExportRequest> {
   const overlays: Overlay[] = []
   // Rasterize one overlay at a time to avoid keeping many full-size canvases live together.
-  for (const overlay of session.overlays) overlays.push(await prepareOverlay(overlay, session))
+  for (const overlay of session.overlays) {
+    if (narrationSubtitleVisible(overlay, session.overlays)) overlays.push(await prepareOverlay(overlay, session))
+  }
   return {
     canvas: session.canvas,
     sources: session.sources.map(({ id, metadata }) => ({ id, metadata })),

@@ -37,7 +37,7 @@ test('Insert, export and undo half-speed Replay', async () => {
   try {
     const page = await app.firstWindow()
     await dismissHardwareWarningIfNeeded(page)
-    await expect(page.locator('.effect-add > button')).toHaveText(['Speed', 'Replay', 'Zoom', 'Freeze', 'Transition', 'Blur faces'])
+    await expect(page.locator('.effect-add > button')).toHaveText(['Speed', 'Replay', 'Zoom', 'Freeze', 'Transition', 'Blur faces', 'Re-voice'])
     await expect.poll(() => page.locator('.effect-add').evaluate((element) => getComputedStyle(element).gridTemplateColumns.split(' ').length)).toBe(2)
     await expect(page.getByRole('button', { name: 'Speed', exact: true })).toBeDisabled()
     await expect(page.getByRole('button', { name: 'Zoom', exact: true })).toBeDisabled()

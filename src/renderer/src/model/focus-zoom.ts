@@ -1,4 +1,4 @@
-import type { EditSession, FocusZoomAmount, FocusZoomEffect } from '@shared/types'
+import type { EditSession, FocusZoomAmount, FocusZoomEffect, FocusZoomMode } from '@shared/types'
 import { focusZoomAmountAtProgress, focusZoomDefaultTransitionDuration } from '@shared/focus-zoom'
 import { clamp, makeId, timelineDuration } from './timeline'
 
@@ -16,7 +16,7 @@ export function focusCameraTransformAtTime(
   frame = { left: 0, top: 0, width: 1, height: 1 }
 ): string | undefined {
   const effect = effects.find((item) => outputTime >= item.start && outputTime <= item.start + item.duration)
-  if (!effect) return undefined
+  if (!effect || effect.mode === 'circle') return undefined
   const crop = focusCropAtTime(effect, outputTime)
   // Export zooms after the Short crop. Map that crop-local camera back into
   // the full-source preview, keeping the red guide and overlays stationary.
@@ -25,9 +25,11 @@ export function focusCameraTransformAtTime(
   return `scale(${crop.zoom}) translate(${left}%, ${top}%)`
 }
 
-export function addFocusZoom(session: EditSession, start: number, end: number, zoom: FocusZoomAmount, focusX: number, focusY: number, transitionDuration = focusZoomDefaultTransitionDuration): EditSession {
+export function addFocusZoom(session: EditSession, start: number, end: number, zoom: FocusZoomAmount, focusX: number, focusY: number,
+  transitionDuration = focusZoomDefaultTransitionDuration, mode?: FocusZoomMode): EditSession {
   const duration = timelineDuration(session.segments)
-  const effect: FocusZoomEffect = { id: makeId('zoom'), start: clamp(start, 0, duration), duration: Math.max(0.001, Math.min(end, duration) - Math.max(start, 0)), transitionDuration, zoom, focusX: clamp(focusX, 0, 1), focusY: clamp(focusY, 0, 1) }
+  const effect: FocusZoomEffect = { id: makeId('zoom'), start: clamp(start, 0, duration), duration: Math.max(0.001, Math.min(end, duration) - Math.max(start, 0)), transitionDuration,
+    ...(mode === undefined ? {} : { mode }), zoom, focusX: clamp(focusX, 0, 1), focusY: clamp(focusY, 0, 1) }
   const focusZooms = session.focusZooms.filter((item) => item.start + item.duration <= effect.start || item.start >= effect.start + effect.duration)
   return { ...session, focusZooms: [...focusZooms, effect].sort((left, right) => left.start - right.start) }
 }

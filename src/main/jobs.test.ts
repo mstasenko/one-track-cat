@@ -1,4 +1,4 @@
-import { access, mkdtemp, rm } from 'node:fs/promises'
+import { access, mkdtemp, rm, symlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -16,6 +16,24 @@ import { JobManager } from './jobs'
 beforeEach(() => send.mockClear())
 
 describe('media job progress', () => {
+  it('isolates frame allocator settings to FFmpeg children', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'otc-worker-environment-'))
+    const executable = join(directory, 'ffmpeg')
+    vi.stubEnv('MALLOC_ARENA_MAX', '7')
+    try {
+      // A real child verifies launch-time environment isolation without media or a GPU.
+      await symlink(process.execPath, executable)
+      const expected = process.platform === 'linux' ? '2' : '7'
+      const check = (value: string): string => `if(process.env.MALLOC_ARENA_MAX!==${JSON.stringify(value)})process.exit(2)`
+      await new JobManager().run(executable, ['-e', check(expected)], 'export', 1)
+      await new JobManager().run(process.execPath, ['-e', check('7')], 'export', 1)
+      expect(process.env.MALLOC_ARENA_MAX).toBe('7')
+    } finally {
+      vi.unstubAllEnvs()
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+
   it('ignores FFmpeg N/A timestamps before reporting numeric progress', async () => {
     const script = "process.stdout.write('out_time_us=N/A\\nout_time_us=5000000\\n')"
     await new JobManager().run(process.execPath, ['-e', script], 'export', 10)

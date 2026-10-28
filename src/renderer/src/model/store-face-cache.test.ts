@@ -24,7 +24,7 @@ function api(): otcApi {
     waveform: vi.fn().mockResolvedValue([0.1, 0.8]), scanAssets: vi.fn().mockResolvedValue([]),
     chooseExportPath: vi.fn().mockResolvedValue('/output.mp4'), exportVideo: vi.fn().mockResolvedValue(undefined),
     facePackStatus: vi.fn().mockResolvedValue({ available: false, message: 'Face model pack unavailable' }),
-    aiPackStatus: vi.fn().mockResolvedValue({ available: false, message: 'AI enhancement pack unavailable' }),
+    upscalePackStatus: vi.fn().mockResolvedValue({ available: false, message: 'Upscaling pack unavailable' }),
     previewFaces: vi.fn().mockResolvedValue('/preview.mp4'), restoreFacePreview: vi.fn().mockResolvedValue([]),
     loadSession: vi.fn().mockResolvedValue(null), saveSession: vi.fn().mockResolvedValue(undefined),
     resetSession: vi.fn().mockResolvedValue(undefined), clearFaceCache: vi.fn().mockResolvedValue(undefined),

@@ -269,16 +269,16 @@ describe('face detection cache sessions', () => {
     await second.cleanup()
   })
 
-  it('reuses ordinary face detections regardless of AI enhancement', async () => {
+  it('reuses ordinary face detections regardless of Upscaling', async () => {
     mocks.snapshot.mockImplementation((value) => Promise.resolve(JSON.stringify(value)))
     const first = await prepareFaceDetectionCache(request(), 0)
     await first.onWorkerStderr?.(Readable.from(['RCFACE1 0 0\n']))
     await first.commit()
     await first.cleanup()
 
-    for (const aiEnhance of [{}, undefined]) {
+    for (const upscale of [{}, undefined]) {
       const changed = request()
-      if (aiEnhance !== undefined) changed.aiEnhance = aiEnhance
+      if (upscale !== undefined) changed.upscale = upscale
       const next = await prepareFaceDetectionCache(changed, 0)
       expect(next.workerArgs[0]).toBe('--detections-cache')
       await next.cleanup()

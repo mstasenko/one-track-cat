@@ -22,3 +22,8 @@ Object.defineProperty(HTMLMediaElement.prototype, 'pause', {
   configurable: true,
   value: vi.fn()
 })
+
+Object.defineProperty(Element.prototype, 'scrollIntoView', {
+  configurable: true,
+  value: vi.fn()
+})

@@ -92,7 +92,8 @@ describe('timeline transitions', () => {
     ['slideright', 'transform'],
     ['circleopen', 'clipPath'],
     ['zoomin', 'transform'],
-    ['hblur', 'filter']
+    ['hblur', 'filter'],
+    ['spin', 'transform']
   ] as const)('creates bounded %s preview styles', (effect, currentProperty) => {
     const styles = transitionStyles({ effect, progress: 1.5 })
     expect(styles.current).toHaveProperty(currentProperty)
@@ -102,5 +103,28 @@ describe('timeline transitions', () => {
   it('eases fades at both ends', () => {
     expect(transitionStyles({ effect: 'fade', progress: 0.25 }).current.opacity).toBeCloseTo(0.15625)
     expect(transitionStyles({ effect: 'fade', progress: 0.75 }).current.opacity).toBeCloseTo(0.84375)
+  })
+
+  it('keeps dissolve blur symmetric without darkening the outgoing source', () => {
+    for (const progress of [0, 0.25, 0.5, 0.75, 1]) {
+      const styles = transitionStyles({ effect: 'dissolve', progress })
+      const sigma = 10 * progress * (1 - progress)
+      expect(styles.current.opacity).toBe(progress)
+      expect(styles.previous.opacity).toBeUndefined()
+      expect(styles.current.filter).toBe(`blur(${sigma}px)`)
+      expect(styles.previous.filter).toBe(`blur(${sigma}px)`)
+    }
+  })
+
+  it('spins both sources while covering the frame and ends on normal incoming video', () => {
+    const start = transitionStyles({ effect: 'spin', progress: 0 }, { width: 16, height: 9 })
+    const middle = transitionStyles({ effect: 'spin', progress: 0.5 }, { width: 16, height: 9 })
+    const end = transitionStyles({ effect: 'spin', progress: 1 }, { width: 16, height: 9 })
+    expect(start.current).toMatchObject({ opacity: 0, transform: 'rotate(-360deg) scale(1)' })
+    expect(end.current).toMatchObject({ opacity: 1, transform: 'rotate(0deg) scale(1)' })
+    expect(middle.current.transform).toContain('rotate(-180deg)')
+    expect(middle.previous.transform).toContain('rotate(180deg)')
+    const quarter = transitionStyles({ effect: 'spin', progress: 0.25 }, { width: 16, height: 9 })
+    expect(Number(quarter.current.transform?.match(/scale\(([^)]+)\)/)?.[1])).toBeGreaterThan(1)
   })
 })

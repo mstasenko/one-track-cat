@@ -33,7 +33,7 @@ export function props(overrides: Partial<PreviewProps> = {}): PreviewProps {
     onOverlayGestureEnd: vi.fn(),
     onOverlayGestureCancel: vi.fn(),
     onAddMark: vi.fn(),
-    onClearMarks: vi.fn(),
+    onClearMark: vi.fn(),
     onRemoveMarked: vi.fn(),
     onUndo: vi.fn(),
     onRedo: vi.fn(),

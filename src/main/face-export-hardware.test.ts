@@ -31,9 +31,9 @@ vi.mock('./face-worker', () => ({
   buildFaceWorkerCommand: mocks.buildFaceWorkerCommand,
   nativeFaceWorkerCommand: (pack: { executable: string; model: string }, _canvas: unknown, effects: string, device: string) => ({
     executable: pack.executable, args: ['--model', pack.model, '--effects', effects, '--device', device]
-  }),
-  restrictedIntelRenderNode: mocks.restrictedIntelRenderNode
+  })
 }))
+vi.mock('./intel-device', () => ({ restrictedIntelRenderNode: mocks.restrictedIntelRenderNode }))
 vi.mock('./privileged-export', () => ({
   nutVideoRemuxCommand: (output: string) => ({ executable: '/bundled/ffmpeg', args: ['-f', 'nut', '-i', 'pipe:0', output] }),
   privilegedVideoEncoderCommand: (_canvas: unknown, _duration: number, renderNode: string, executable: string) => ({

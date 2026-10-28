@@ -55,6 +55,13 @@ function TransitionVideo({ side, preview, fit, objectPosition, className, playin
     return video && mixer ? mixer.register(video) : undefined
   }, [mixer, hasMedia])
 
+  useLayoutEffect(() => {
+    const video = videoRef.current
+    return () => {
+      if (video && !video.paused) video.pause()
+    }
+  }, [path])
+
   useEffect(() => {
     const video = videoRef.current
     if (video && mixer) mixer.setGain(video, 0)
@@ -111,14 +118,14 @@ function TransitionVideo({ side, preview, fit, objectPosition, className, playin
 
   useEffect(() => {
     const video = videoRef.current
-    // Inactive preloaders stay parked at their next source frame even while the
-    // main timeline is playing. Active videos advance freely until paused.
-    if (video && (!playing || !active) && video.readyState >= 1 && Math.abs(video.currentTime - sourceTime) > 0.001) {
+    // Park inactive preloaders, but let a retained playing audio tail finish its
+    // fade. Seeking that tail back to its captured handoff time makes it click.
+    if (video && (!playing || (!active && rate <= 0)) && video.readyState >= 1 && Math.abs(video.currentTime - sourceTime) > 0.001) {
       setReady(false)
       pendingSeekTime.current = sourceTime
       video.currentTime = sourceTime
     }
-  }, [active, playing, sourceTime])
+  }, [active, playing, rate, sourceTime])
 
   useEffect(() => {
     const video = videoRef.current

@@ -6,6 +6,7 @@ import { ffmpegPath, hardwareFfmpegCandidates } from './binaries'
 import { hardwareLabelForRenderNode, vaapiCodecOutput, vaapiCodecs, vaapiProbeArgs } from './export-encoder'
 import { runFacePipeline, type FaceCommand } from './face-process'
 import { jobs } from './jobs'
+import { prepareFfmpegArguments } from './ffmpeg-arguments'
 
 const execFileAsync = promisify(execFile)
 
@@ -156,8 +157,10 @@ export async function encodeWithPrivilegedGpu(
   const audio = join(directory, 'gpu-audio.m4a')
   const video = join(directory, 'gpu-video.mp4')
   const hardwareLabel = await hardwareLabelForRenderNode(renderNode)
+  const commands = privilegedPipelineCommands(request, inputArgs, filter, directory, duration, renderNode, executable)
+  commands[0].args = await prepareFfmpegArguments(commands[0].args, directory)
   await runFacePipeline(
-    privilegedPipelineCommands(request, inputArgs, filter, directory, duration, renderNode, executable),
+    commands,
     jobId,
     duration,
     {

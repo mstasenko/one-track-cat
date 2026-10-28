@@ -96,15 +96,31 @@ describe('Preview', () => {
     expect(parseFloat(incomingTransitionVideo(app).style.clipPath.split(' ')[1] ?? '')).toBeCloseTo(50)
   })
 
-  it('offers a non-destructive way to clear marks', () => {
+  it('offers side-aware non-destructive mark clearing', () => {
     const session = createSession(metadata)
     session.marks = [2, 6]
-    const onClearMarks = vi.fn()
-    const app = mount({ session, onClearMarks })
-    const clear = [...app.querySelectorAll('button')].find((button) => button.textContent === 'Clear Marks')
-    if (!(clear instanceof HTMLButtonElement)) throw new Error('Clear Marks button missing')
-    act(() => { clear.click() })
-    expect(onClearMarks).toHaveBeenCalledOnce()
+    session.playhead = 3
+    const onClearMark = vi.fn()
+    const app = mount({ session, onClearMark })
+    const left = [...app.querySelectorAll('button')].find((button) => button.textContent === 'Clear left mark')
+    const right = [...app.querySelectorAll('button')].find((button) => button.textContent === 'Clear right mark')
+    if (!(left instanceof HTMLButtonElement) || !(right instanceof HTMLButtonElement)) throw new Error('Clear mark buttons missing')
+    expect(left.disabled).toBe(false)
+    expect(right.disabled).toBe(false)
+    act(() => { left.click() })
+    expect(onClearMark).toHaveBeenCalledWith('left')
+  })
+
+  it('disables a side without an actual saved mark at that boundary', () => {
+    const session = createSession(metadata)
+    session.marks = [2]
+    session.playhead = 1
+    const app = mount({ session })
+    const left = [...app.querySelectorAll('button')].find((button) => button.textContent === 'Clear left mark')
+    const right = [...app.querySelectorAll('button')].find((button) => button.textContent === 'Clear right mark')
+    if (!(left instanceof HTMLButtonElement) || !(right instanceof HTMLButtonElement)) throw new Error('Clear mark buttons missing')
+    expect(left.disabled).toBe(true)
+    expect(right.disabled).toBe(false)
   })
 
   it('uses the renamed mark controls', () => {
@@ -253,6 +269,8 @@ describe('Preview', () => {
       configurable: true,
       value: vi.fn((callback: VideoFrameRequestCallback) => { presented = callback; return 2 })
     })
+    mediaClock(incoming, 4.25)
+    mediaClock(incomingTransitionVideo(app), 4.25)
     act(() => { incoming.dispatchEvent(new Event('seeked')) })
     expect(incoming.style.visibility).toBe('hidden')
     act(() => { presented?.(0, { mediaTime: 4.25 } as VideoFrameCallbackMetadata) })
@@ -418,6 +436,16 @@ describe('Preview', () => {
     expect(app.querySelector('[role="alert"]')?.textContent).toContain('video cannot be shown')
     act(() => { video.dispatchEvent(new Event('loadeddata')) })
     expect(app.querySelector('[role="alert"]')).toBeNull()
+  })
+
+  it('renders circle zooms over source media and skips them for rendered previews', () => {
+    const session = createSession(metadata)
+    session.focusZooms = [{ id: 'circle', start: 0, duration: 5, mode: 'circle', zoom: 2, focusX: 0.5, focusY: 0.5 }]
+    const app = mount({ session })
+    expect(app.querySelector('.focus-zoom-circle')).not.toBeNull()
+
+    act(() => { root?.render(<Preview {...props({ session, renderedPreview: { url: 'media://rendered', start: 0, end: 10 } })} />) })
+    expect(app.querySelector('.focus-zoom-circle')).toBeNull()
   })
 
   it('keeps paused source seeks side-effect free and handles freeze or missing sources', () => {

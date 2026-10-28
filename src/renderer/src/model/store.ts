@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { isNarrationSubtitle, withoutNarrationOverlay } from './narration-subtitles'
 import { faceBlurMaxEffects } from '@shared/types'
 import type { FaceBlurSettings, Overlay, TimelineSource } from '@shared/types'
 import type { EditorState } from './editor-state'
@@ -9,6 +10,7 @@ import {
   defaultTextOverlay,
   deletionRange,
   makeId,
+  markAtBoundary,
   primarySource,
   removeOutputRange,
   timelineDuration,
@@ -181,15 +183,14 @@ export const useEditorStore = create<EditorState>((set, get) => {
       }))
     })
   },
-  clearMarks() {
+  clearMark(side) {
     set((state) => {
       if (!state.session) return state
-      const range = deletionRange(state.session)
-      if (!range) return state
-      const marks = state.session.marks.filter((mark) =>
-        Math.abs(mark - range[0]) > 0.0001 && Math.abs(mark - range[1]) > 0.0001
-      )
-      if (marks.length === state.session.marks.length) return state
+      const boundary = markAtBoundary(state.session, side)
+      if (boundary === undefined) return state
+      const index = state.session.marks.findIndex((mark) => Math.abs(mark - boundary) <= 0.0001)
+      if (index < 0) return state
+      const marks = state.session.marks.filter((_mark, markIndex) => markIndex !== index)
       return mutation(state, (session) => ({ ...session, marks }))
     })
   },
@@ -231,12 +232,12 @@ export const useEditorStore = create<EditorState>((set, get) => {
       return mutation(state, (session) => applySpeedToOutputRange(session, range[0], range[1], rate))
     })
   },
-  addFocusZoom(zoom, focusX, focusY, transitionDuration) {
+  addFocusZoom(zoom, focusX, focusY, transitionDuration, mode) {
     set((state) => {
       if (!state.session) return state
       const range = deletionRange(state.session)
       if (!range) return state
-      return mutation(state, (session) => addFocusZoom(session, range[0], range[1], zoom, focusX, focusY, transitionDuration))
+      return mutation(state, (session) => addFocusZoom(session, range[0], range[1], zoom, focusX, focusY, transitionDuration, mode))
     })
   },
   nudgeShortFrame(direction) {
@@ -414,7 +415,8 @@ export const useEditorStore = create<EditorState>((set, get) => {
     }
   },
   selectOverlay(id) {
-    set((state) => state.session ? { session: { ...state.session, selectedOverlayId: id } } : state)
+    set((state) => state.session && !state.session.overlays.some((overlay) => overlay.id === id && isNarrationSubtitle(overlay))
+      ? { session: { ...state.session, selectedOverlayId: id } } : state)
   },
   updateOverlay(id, patch) {
     set((state) => mutation(state, (session) => patchedOverlaySession(session, id, patch)))
@@ -452,7 +454,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
   removeSelectedOverlay() {
     set((state) => mutation(state, (session) => ({
       ...session,
-      overlays: session.overlays.filter((overlay) => overlay.id !== session.selectedOverlayId),
+      overlays: withoutNarrationOverlay(session.overlays, session.selectedOverlayId),
       selectedOverlayId: null
     })))
   },

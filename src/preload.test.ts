@@ -73,25 +73,53 @@ describe('face cache bridge', () => {
   })
 })
 
+describe('narration bridge', () => {
+  it.each([false, true])('forwards translation-to-English=%s to narration analysis', async (translateToEnglish) => {
+    const request = {
+      outputPath: '',
+      canvas: { width: 320, height: 180, fps: 30, fit: 'contain' as const },
+      sources: [], segments: [], overlays: [], focusZooms: [], faceBlurs: []
+    } satisfies ExportRequest
+    const narration = exposedApi.narration
+    if (!narration) throw new Error('Narration bridge is missing')
+    invoke.mockResolvedValueOnce({})
+    await narration.analyze(request, [0, 1], 'auto', translateToEnglish)
+    expect(invoke).toHaveBeenCalledWith('narration:analyze', request, [0, 1], 'auto', translateToEnglish)
+  })
+  it('forwards optional recognition settings after translation', async () => {
+    const request = {
+      outputPath: '',
+      canvas: { width: 320, height: 180, fps: 30, fit: 'contain' as const },
+      sources: [], segments: [], overlays: [], focusZooms: [], faceBlurs: []
+    } satisfies ExportRequest
+    const narration = exposedApi.narration
+    if (!narration) throw new Error('Narration bridge is missing')
+    const recognition = { speechDetection: 'sensitive' as const }
+    invoke.mockResolvedValueOnce({})
+    await narration.analyze(request, [0, 1], 'auto', false, recognition)
+    expect(invoke).toHaveBeenCalledWith('narration:analyze', request, [0, 1], 'auto', false, recognition)
+  })
+})
+
 describe('AI model download bridge', () => {
   it.each([false, true])('forwards actual spatial readiness=%s to the existing IPC channel', async (spatial) => {
     invoke.mockResolvedValueOnce({ available: true, message: '' })
-    await exposedApi.aiPackStatus(spatial)
-    expect(invoke).toHaveBeenCalledWith('ai:pack-status', spatial)
+    await exposedApi.upscalePackStatus(spatial)
+    expect(invoke).toHaveBeenCalledWith('upscale:pack-status', spatial)
   })
   it('forwards start and cancellation to the main process', async () => {
     invoke.mockResolvedValueOnce(undefined).mockResolvedValueOnce(true)
     await exposedApi.startModelDownload?.()
     await expect(exposedApi.cancelModelDownload?.()).resolves.toBe(true)
-    expect(invoke).toHaveBeenNthCalledWith(1, 'ai:model-download:start')
-    expect(invoke).toHaveBeenNthCalledWith(2, 'ai:model-download:cancel')
+    expect(invoke).toHaveBeenNthCalledWith(1, 'upscale:model-download:start')
+    expect(invoke).toHaveBeenNthCalledWith(2, 'upscale:model-download:cancel')
   })
 
   it('forwards the selected Flash mode to status and first-use download', async () => {
-    await exposedApi.aiPackStatus(true, 'base')
+    await exposedApi.upscalePackStatus(true, 'base')
     await exposedApi.startModelDownload?.('base')
-    expect(invoke).toHaveBeenNthCalledWith(1, 'ai:pack-status', true, 'base')
-    expect(invoke).toHaveBeenNthCalledWith(2, 'ai:model-download:start', 'base')
+    expect(invoke).toHaveBeenNthCalledWith(1, 'upscale:pack-status', true, 'base')
+    expect(invoke).toHaveBeenNthCalledWith(2, 'upscale:model-download:start', 'base')
   })
 })
 

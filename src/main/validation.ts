@@ -1,12 +1,12 @@
 import { basename } from 'node:path'
+import { validateNarrationOverlay } from './narration-validation'
 import { focusZoomMaxTransitionDuration, focusZoomMinTransitionDuration } from '../focus-zoom'
 import { record, text, identifier, number, boolean, oneOf, validateUniqueIds, type UnknownRecord } from './validation-values'
 import { parseShortFraming } from './short-frame-validation'
 import {
   audioFadeDurations,
-  type AiEnhancementOptions,
-  faceBlurMaxEffects,
-  faceBlurMaxHoldSeconds,
+  type UpscaleOptions,
+  faceBlurMaxEffects, faceBlurMaxHoldSeconds,
   focusZoomAmounts,
   gameAudioLevels,
   mediaAnimationPresets,
@@ -31,21 +31,20 @@ import type {
 import { timelineDuration } from '../segment-time'
 import { fitVideoRangeTransition } from '../video-range-transition'
 
-export function parseAiEnhancementMode(value: unknown): AiEnhancementOptions['mode'] {
-  return value === undefined ? undefined : oneOf(value, ['turbo', 'base'] as const, 'AI enhancement mode')
+export function parseUpscaleMode(value: unknown): UpscaleOptions['mode'] {
+  return value === undefined ? undefined : oneOf(value, ['turbo', 'base'] as const, 'Upscaling mode')
 }
 
-function parseAiEnhancement(value: unknown): AiEnhancementOptions {
-  const input = record(value, 'AI enhancement')
+function parseUpscale(value: unknown): UpscaleOptions {
+  const input = record(value, 'Upscaling')
   const unknown = Object.keys(input).find((key) => key !== 'mode')
-  if (unknown) throw new Error(`AI enhancement field ${unknown} is not supported`)
+  if (unknown) throw new Error(`Upscaling field ${unknown} is not supported`)
   if (Object.prototype.hasOwnProperty.call(input, 'mode') && input.mode === undefined) {
-    throw new Error('AI enhancement mode is not supported')
+    throw new Error('Upscaling mode is not supported')
   }
-  const mode = parseAiEnhancementMode(input.mode)
+  const mode = parseUpscaleMode(input.mode)
   return mode === undefined ? {} : { mode }
 }
-
 
 function optionalNumberPreset(value: unknown, values: readonly number[], label: string): void {
   if (value !== undefined && (typeof value !== 'number' || !values.includes(value))) {
@@ -191,9 +190,8 @@ function validateVisual(input: UnknownRecord): void {
 }
 
 function validateTextOverlay(input: UnknownRecord, canvas: ProjectCanvas): void {
-  if (typeof input.text !== 'string' || input.text.length > 100_000) {
-    throw new Error('Text content must be a string of at most 100000 characters')
-  }
+  if (input.narrationId !== undefined) text(input.narrationId, 'Subtitle narration ID', 128)
+  if (typeof input.text !== 'string' || input.text.length > 100_000) throw new Error('Text content must be a string of at most 100000 characters')
   text(input.fontFamily, 'Font family', 256)
   number(input.fontSize, 'Font size', 0.1, 1000)
   text(input.color, 'Text color', 64)
@@ -264,6 +262,7 @@ function validateAudioOverlay(input: UnknownRecord): void {
   number(input.sourceIn, 'Source start', 0, 1e8)
   number(input.volume, 'Audio volume', 0, 2)
   validateAudioSettings(input)
+  validateNarrationOverlay(input)
 }
 
 function validateAudioSettings(input: UnknownRecord): void {
@@ -358,11 +357,10 @@ export function parseExportRequest(value: unknown): ExportRequest {
     ...(input.focusZooms === undefined ? {} : { focusZooms }),
     ...(shortFramePoints === undefined ? {} : { shortFramePoints }),
     ...(input.faceBlurs === undefined ? {} : { faceBlurs }),
-    ...(input.aiEnhance === undefined ? {} : { aiEnhance: parseAiEnhancement(input.aiEnhance) }),
+    ...(input.upscale === undefined ? {} : { upscale: parseUpscale(input.upscale) }),
     ...(input.videoTransitions === undefined ? {} : { videoTransitions })
   }
 }
-
 
 function parseVideoRangeTransitions(value: unknown, timelineDuration: number): VideoRangeTransition[] {
   if (value === undefined) return []
@@ -406,10 +404,12 @@ function parseFocusZooms(value: unknown, duration: number): FocusZoomEffect[] {
     const effectDuration = number(input.duration, 'Focus zoom duration', 0.001, duration)
     const transitionDuration = input.transitionDuration === undefined ? undefined
       : number(input.transitionDuration, 'Focus zoom transition duration', focusZoomMinTransitionDuration, focusZoomMaxTransitionDuration)
+    const mode = input.mode === undefined ? undefined : oneOf(input.mode, ['frame', 'circle'] as const, 'Focus zoom mode')
     if (start + effectDuration > duration + 0.0001) throw new Error('Focus zoom extends past the timeline')
     if (typeof input.zoom !== 'number' || !focusZoomAmounts.includes(input.zoom as typeof focusZoomAmounts[number])) throw new Error('Focus zoom amount is unsupported')
     return { id: identifier(input.id, 'Focus zoom ID'), start, duration: effectDuration,
       ...(transitionDuration === undefined ? {} : { transitionDuration }),
+      ...(mode === undefined ? {} : { mode }),
       zoom: input.zoom as FocusZoomEffect['zoom'], focusX: number(input.focusX, 'Focus x', 0, 1), focusY: number(input.focusY, 'Focus y', 0, 1) }
   })
   validateUniqueIds(output, 'Focus zoom')

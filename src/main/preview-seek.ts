@@ -134,11 +134,14 @@ export function prepareTimelineInputs(
   plan?: PreviewSeekPlan,
   decoderInputArgs: readonly string[] = []
 ): ExportRequest {
+  // Frame-threaded decoders retain extra full-resolution frames. Reduce threads
+  // as clip count grows, retaining four for one clip and at least one per clip.
+  const threads = String(Math.max(1, Math.floor(4 / Math.max(1, request.segments.length))))
   const sources = request.segments.map((segment, index) => {
     const source = sourceFor(request, segment)
     if (!source) throw new Error('A timeline video source is missing')
     if (segment.kind === 'freeze') {
-      inputArgs.push('-ss', seconds(segment.sourceTime), '-t', '1', ...decoderInputArgs, '-threads', '4', '-i', source.path)
+      inputArgs.push('-ss', seconds(segment.sourceTime), '-t', '1', ...decoderInputArgs, '-threads', threads, '-i', source.path)
       return { id: `export-segment-${index}`, metadata: source }
     }
     const duration = segment.sourceEnd - segment.sourceStart
@@ -150,7 +153,7 @@ export function prepareTimelineInputs(
     inputArgs.push(
       '-ss', seconds(seeked ? plan.videoStart : segment.sourceStart),
       '-t', seconds(seeked ? plan.videoDuration : duration + handle),
-      ...decoderInputArgs, '-threads', '4', '-i', source.path
+      ...decoderInputArgs, '-threads', threads, '-i', source.path
     )
     return {
       id: `export-segment-${index}`,

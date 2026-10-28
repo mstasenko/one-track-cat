@@ -1,5 +1,11 @@
 # Third-party notices
 
+## Optional AI Narration voice pack
+
+See [voice-pack model and adapter notices](assets/voice/NOTICE.md) for the
+upstream model licenses and pinned conversion sources. Voice cloning requires
+permission from the speaker. Model licenses do not grant rights to recordings.
+
 ## Internet Meme Knowledge Graph (IMKG)
 
 The captioned-meme search index is derived from the IMKG project's original ImgFlip data:

@@ -113,6 +113,19 @@ afterEach(() => {
 })
 
 describe('asset panel', () => {
+  it('disables Re-voice without its runtime and refreshes availability on focus', async () => {
+    const status = vi.fn().mockResolvedValue({ available: false })
+    Object.defineProperty(window.otc, 'narration', { configurable: true, value: { status } })
+    const app = mount()
+    await act(async () => { await Promise.resolve() })
+    expect(button(app, 'Re-voice').disabled).toBe(true)
+    status.mockResolvedValue({ available: true })
+    await act(async () => { window.dispatchEvent(new Event('focus')); await Promise.resolve() })
+    expect(button(app, 'Re-voice').disabled).toBe(false)
+    status.mockRejectedValue(new Error('Pack removed'))
+    await act(async () => { window.dispatchEvent(new Event('focus')); await Promise.resolve() })
+    expect(button(app, 'Re-voice').disabled).toBe(true)
+  })
   it('exposes insert, media, and effect actions from the add menu', () => {
     const onText = vi.fn()
     const onNew = vi.fn()
@@ -121,7 +134,7 @@ describe('asset panel', () => {
     const onInsert = vi.fn()
     const app = mount({ onText, onNew, onCategory, onReplay, onInsert })
     expect([...app.querySelectorAll('.effect-add button')].map((candidate) => candidate.textContent)).toEqual([
-      'Speed', 'Replay', 'Zoom', 'Freeze', 'Transition', 'Blur faces'
+      'Speed', 'Replay', 'Zoom', 'Freeze', 'Transition', 'Blur faces', 'Re-voice'
     ])
 
     act(() => { button(app, 'Text').click() })
@@ -163,13 +176,14 @@ describe('asset panel', () => {
     const duration = selects[2]
     if (!into || !back || !duration) throw new Error('transition controls missing')
     expect(duration.value).toBe('2')
-    selectValue(into, 'fade')
+    expect([...into.options].map((option) => option.value)).toContain('spin')
+    selectValue(into, 'spin')
     selectValue(back, 'wipeleft')
     selectValue(duration, '1')
     expect(duration.disabled).toBe(false)
     act(() => { button(app, 'Select video').click() })
     expect(onInsert).toHaveBeenCalledWith({
-      into: { effect: 'fade', duration: 1 },
+      into: { effect: 'spin', duration: 1 },
       back: { effect: 'wipeleft', duration: 1 }
     })
   })
@@ -237,16 +251,23 @@ describe('asset panel', () => {
     act(() => { button(app, 'Zoom').click() })
     const transitionDuration = app.querySelector('input[aria-label="Transition (seconds)"]')
     expect(transitionDuration).toBeInstanceOf(HTMLInputElement)
+    expect(app.querySelector<HTMLSelectElement>('select[aria-label="View"]')?.value).toBe('frame')
     expect((transitionDuration as HTMLInputElement).value).toBe('0.5')
     act(() => { button(app, '2×').click() })
-    expect(onFocusPick).toHaveBeenCalledWith(2, 0.5)
+    expect(onFocusPick).toHaveBeenCalledWith(2, 0.5, 'frame')
     const input = transitionDuration as HTMLInputElement
     act(() => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(input, '1.25')
       input.dispatchEvent(new Event('input', { bubbles: true }))
     })
+    const view = app.querySelector<HTMLSelectElement>('select[aria-label="View"]')
+    if (!view) throw new Error('view selector missing')
+    selectValue(view, 'circle')
+    expect(app.querySelector('input[aria-label="Draw circle (seconds)"]')).toBeInstanceOf(HTMLInputElement)
+    expect(app.textContent).toContain('Choose a size, then click what to highlight.')
+    expect(app.querySelector('.effect-options')?.textContent).toContain('3×')
     act(() => { button(app, '3×').click() })
-    expect(onFocusPick).toHaveBeenLastCalledWith(3, 1.25)
+    expect(onFocusPick).toHaveBeenLastCalledWith(3, 1.25, 'circle')
     expect(button(app, 'Remove zoom').disabled).toBe(false)
     act(() => { button(app, 'Remove zoom').click() })
     expect(onRemoveFocusZoom).toHaveBeenCalledOnce()

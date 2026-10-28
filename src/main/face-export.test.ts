@@ -16,8 +16,9 @@ const encoderMock = vi.hoisted(() => ({ exportEncoders: vi.fn() }))
 const detectionCacheMock = vi.hoisted(() => ({ prepare: vi.fn() }))
 vi.mock('./face-worker', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./face-worker')>()
-  return { ...actual, buildFaceWorkerCommand: workerMock.build, restrictedIntelRenderNode: restrictedMock.node }
+  return { ...actual, buildFaceWorkerCommand: workerMock.build }
 })
+vi.mock('./intel-device', () => ({ restrictedIntelRenderNode: restrictedMock.node }))
 vi.mock('./export-encoder', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./export-encoder')>()
   return { ...actual, exportEncoders: encoderMock.exportEncoders }
@@ -117,6 +118,9 @@ describe('face export composition pipeline', () => {
     await encodeWithFaces(request, ['-hide_banner', '-y'], {
       graph: 'color=c=red:s=64x64:r=10:d=1[video];sine=frequency=880:duration=1[aout]', videoLabel: 'video', audioLabel: 'aout'
     }, directory, output, 1, 'transport-cpu')
+    for (const path of ['faces.tsv', 'masked.mp4', 'audio.m4a']) {
+      await expect(readFile(join(directory, path))).rejects.toMatchObject({ code: 'ENOENT' })
+    }
   }, 15_000)
 
   it('strips source metadata and chapters while preserving media and the source file', async () => {

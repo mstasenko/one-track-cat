@@ -21,6 +21,14 @@ function request(overrides: Partial<ExportRequest> = {}): ExportRequest {
 const selectedRange = [6, 7] as const
 
 describe('selected-preview input seeking', () => {
+  it.each([[1, '4'], [2, '2'], [33, '1']] as const)('bounds decoder concurrency for %s clips', (count, threads) => {
+    const args: string[] = []
+    const segments = Array.from({ length: count }, (_, index) => ({ ...segment, id: `segment-${index}` }))
+    prepareTimelineInputs(request({ segments }), args)
+    const requested = args.flatMap((value, index) => value === '-threads' ? [args[index + 1]] : [])
+    expect(requested).toEqual(Array<string>(count).fill(threads))
+  })
+
   it('plans a two-second-preroll seek on a normal single segment', () => {
     expect(previewSeekPlan(request(), selectedRange)).toEqual({
       offset: 4, videoStart: 5, videoDuration: 5, audioStart: 1, audioDuration: 9, audioInputIndex: 1

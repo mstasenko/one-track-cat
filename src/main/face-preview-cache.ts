@@ -55,7 +55,7 @@ function fixedPreviewPath(): string | undefined {
   }
 }
 
-function requestPaths(request: ExportRequest, pack: { executable: string }): string[] {
+function requestPaths(request: ExportRequest, pack: { executable: string; catalog?: string }): string[] {
   const sourcePaths = request.sources.map((source) => source.metadata.path)
   const overlayPaths = request.overlays
     .filter((overlay) => overlay.type !== 'text')
@@ -64,7 +64,8 @@ function requestPaths(request: ExportRequest, pack: { executable: string }): str
   const worker = basename(pack.executable)
   return [...new Set([
     ...sourcePaths, ...overlayPaths,
-    join(packDirectory, 'manifest.json'), join(packDirectory, 'model.xml'), join(packDirectory, 'model.bin'),
+    join(packDirectory, 'manifest.json'),
+    ...(pack.catalog ? [pack.catalog] : [join(packDirectory, 'model.xml'), join(packDirectory, 'model.bin')]),
     pack.executable, join(packDirectory, `${worker}.bin`)
   ])].sort()
 }

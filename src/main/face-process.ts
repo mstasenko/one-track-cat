@@ -3,6 +3,7 @@ import type { Readable } from 'node:stream'
 import { BrowserWindow } from 'electron'
 import type { HardwareLabel, JobPhase, JobProgress } from '../types'
 import { estimateEtaSeconds, ffmpegProgress } from './progress'
+import { ffmpegEnvironment } from './ffmpeg-environment'
 
 export interface FaceCommand {
   executable: string
@@ -42,9 +43,9 @@ const workerStartupMarker = 'otc-face-blur: starting'
 const workerDeviceMarker = 'otc-face-blur: device='
 const workerCacheMarker = 'otc-face-blur: mode=cached'
 const workerInferenceMarker = 'otc-face-blur: mode=inference'
-const aiStartupMarker = 'otc-ai-enhance: starting'
-const aiDeviceMarker = /^otc-ai-enhance: (?:flash-|rife-)?device=/
-const aiProgressMarker = /^otc-ai-enhance: progress=(0(?:\.\d+)?|1(?:\.0+)?)$/
+const upscaleStartupMarker = 'otc-upscale: starting'
+const upscaleDeviceMarker = /^otc-upscale: (?:flash-|rife-)?device=/
+const upscaleProgressMarker = /^otc-upscale: progress=(0(?:\.\d+)?|1(?:\.0+)?)$/
 const workerStatusLineLimit = 4096
 const preparationMarker = 'showinfo@otc_prepare'
 const elevatedPreparationMessage = 'Preparing video; authorize GPU access if prompted…'
@@ -79,8 +80,8 @@ function appendStderrDetail(detail: string, chunk: string): string {
     index === lines.length - 1 ||
     (!line.startsWith('RCFACE1 ') && line !== workerStartupMarker && !line.startsWith(workerDeviceMarker)
       && !line.startsWith(workerCacheMarker) && !line.startsWith(workerInferenceMarker)
-      && line !== aiStartupMarker && !aiProgressMarker.test(line)
-      && (!aiDeviceMarker.test(line) || line.includes(' failed ')))
+      && line !== upscaleStartupMarker && !upscaleProgressMarker.test(line)
+      && (!upscaleDeviceMarker.test(line) || line.includes(' failed ')))
   ).join('\n').slice(-8000)
 }
 
@@ -102,6 +103,26 @@ export async function shutdownFaceExports(): Promise<void> {
   await Promise.allSettled(pending.values())
 }
 
+/** Use the existing job ownership/cancel/shutdown path for first-use downloads. */
+export async function runFacePreparation(id: string, action: (signal: AbortSignal,
+  progress: (message: string, fraction: number, etaSeconds?: number) => void) => Promise<void>): Promise<void> {
+  if (shutdownRequested || active.has(id)) throw new Error('Job cancelled')
+  const controller = new AbortController()
+  active.set(id, () => controller.abort())
+  const task = Promise.resolve().then(() => action(controller.signal, (message, progress, etaSeconds) => {
+    report({ id, kind: 'export', state: 'running', progress, message, phase: 'preparing',
+      ...(etaSeconds === undefined ? {} : { etaSeconds }) })
+  }))
+  pending.set(id, task)
+  try { await task; controller.signal.throwIfAborted() }
+  catch (error) {
+    report({ id, kind: 'export', state: controller.signal.aborted ? 'cancelled' : 'failed', progress: 0,
+      message: controller.signal.aborted ? 'Job cancelled' : error instanceof Error ? error.message : String(error) })
+    if (controller.signal.aborted) throw new Error('Job cancelled', { cause: error })
+    throw error
+  } finally { active.delete(id); pending.delete(id) }
+}
+
 function requiredChild(children: ChildProcessWithoutNullStreams[], index: number): ChildProcessWithoutNullStreams {
   const child = children[index]
   if (!child) throw new Error('Face processing pipeline child is missing')
@@ -118,8 +139,8 @@ export async function runFacePipeline(
   if (shutdownRequested) throw new Error('Job cancelled')
   const label = options.label ?? 'Masking faces'
   const prefix = options.message ? `${options.message} ` : ''
-  const enhancing = options.phase === 'enhancing'
-  const encodingContext = !enhancing && (options.phase === 'encoding' || options.encodingHardwareLabel !== undefined)
+  const upscaling = options.phase === 'upscaling'
+  const encodingContext = !upscaling && (options.phase === 'encoding' || options.encodingHardwareLabel !== undefined)
   const encodingProcessingLabel = encodingContext
     ? options.encodingHardwareLabel ? `Encoding video using ${options.encodingHardwareLabel}`
       : label === 'Masking faces' ? 'Encoding video' : label
@@ -129,7 +150,7 @@ export async function runFacePipeline(
     ? elevatedPreparationMessage
     : encodingProcessingLabel ?? (label === 'Masking faces' ? faceDetectionMessage : `${label}…`))
   const defaultPhase = options.phase ?? (encodingContext ? 'encoding' : phaseForLabel(label))
-  const processingPhase = enhancing ? 'enhancing' : encodingContext ? 'encoding' : 'masking'
+  const processingPhase = upscaling ? 'upscaling' : encodingContext ? 'encoding' : 'masking'
   const initialPhase = hasElevated ? 'preparing' : defaultPhase
   const pipelineStartedAt = Date.now()
   const pipeline = new Promise<void>((resolve, reject) => {
@@ -156,7 +177,7 @@ export async function runFacePipeline(
     let reportedPreparationProgress = false
     let hardwareLabel = options.hardwareLabel
     let encodingHardwareLabel = options.encodingHardwareLabel
-    let enhancementLabel = 'AI enhancing video'
+    let upscaleLabel = 'Upscaling video'
     let phase = initialPhase
     let phaseStartedAt = pipelineStartedAt
     let phaseStartProgress = 0
@@ -246,34 +267,34 @@ export async function runFacePipeline(
       discardPreparationLine = false
     }
     const reportWorkerLine = (line: string): void => {
-      const aiProgress = enhancing ? aiProgressMarker.exec(line) : null
-      if (aiProgress) {
+      const upscaleProgress = upscaling ? upscaleProgressMarker.exec(line) : null
+      if (upscaleProgress) {
         // Model work can advance before the first encoded frame. Never move
         // backwards when the downstream encoder subsequently catches up.
-        latestProgress = Math.max(latestProgress, Math.min(0.99, Number(aiProgress[1])))
-        emit({ id, kind: 'export', state: 'running', progress: latestProgress, phase: 'enhancing',
-          message: `${prefix}${enhancementLabel}: ${Math.round(latestProgress * 100)}%` })
-      } else if (enhancing && aiDeviceMarker.test(line)) {
+        latestProgress = Math.max(latestProgress, Math.min(0.99, Number(upscaleProgress[1])))
+        emit({ id, kind: 'export', state: 'running', progress: latestProgress, phase: 'upscaling',
+          message: `${prefix}${upscaleLabel}: ${Math.round(latestProgress * 100)}%` })
+      } else if (upscaling && upscaleDeviceMarker.test(line)) {
         if (line.includes(' failed ')) return
         const hardware = workerHardwareLabel(line)
-        enhancementLabel = hardware ? `AI enhancing video using ${hardware}` : 'AI enhancing video'
+        upscaleLabel = hardware ? `Upscaling video using ${hardware}` : 'Upscaling video'
         emit({ id, kind: 'export', state: 'running', progress: latestProgress,
-          message: `${prefix}${enhancementLabel}: ${Math.round(latestProgress * 100)}%`,
-          phase: 'enhancing', hardwareLabel: hardware })
-      } else if ((line === workerStartupMarker || line === aiStartupMarker) && hasElevated && !reportedVideoPreparation && !maskingStarted) {
+          message: `${prefix}${upscaleLabel}: ${Math.round(latestProgress * 100)}%`,
+          phase: 'upscaling', hardwareLabel: hardware })
+      } else if ((line === workerStartupMarker || line === upscaleStartupMarker) && hasElevated && !reportedVideoPreparation && !maskingStarted) {
         reportedVideoPreparation = true
         // Do not include time spent waiting for the authorization agent in
         // the preparation-stage estimate.
         phaseStartedAt = Date.now()
         phaseStartProgress = latestProgress
         emit({ id, kind: 'export', state: 'running', progress: latestProgress, message: videoPreparationMessage, phase: 'preparing' })
-      } else if (!enhancing && line.startsWith(workerCacheMarker) && (!commands[1].elevated || reportedVideoPreparation) && lastAnalysisStatus !== 'cached') {
+      } else if (!upscaling && line.startsWith(workerCacheMarker) && (!commands[1].elevated || reportedVideoPreparation) && lastAnalysisStatus !== 'cached') {
         lastAnalysisStatus = 'cached'
         emit({
           id, kind: 'export', state: 'running', progress: latestProgress,
           message: encodingProcessingLabel ?? cachedFaceMessage, phase: processingPhase, hardwareLabel: undefined
         })
-      } else if (!enhancing && (line.startsWith(workerDeviceMarker) || line.startsWith(workerInferenceMarker)) && (!commands[1].elevated || reportedVideoPreparation) && lastAnalysisStatus !== 'detected') {
+      } else if (!upscaling && (line.startsWith(workerDeviceMarker) || line.startsWith(workerInferenceMarker)) && (!commands[1].elevated || reportedVideoPreparation) && lastAnalysisStatus !== 'detected') {
         const detectedHardware = workerHardwareLabel(line)
         if (detectedHardware) inferenceHardwareLabel = detectedHardware
         hardwareLabel = inferenceHardwareLabel
@@ -373,7 +394,7 @@ export async function runFacePipeline(
       if (failure) break
       let child: ChildProcessWithoutNullStreams
       try {
-        child = spawn(command.executable, command.args, { stdio: ['pipe', 'pipe', 'pipe'] })
+        child = spawn(command.executable, command.args, { stdio: ['pipe', 'pipe', 'pipe'], env: ffmpegEnvironment(command.executable) })
       } catch (error) {
         const failure = error instanceof Error ? error : new Error(String(error))
         fail(authorizationError(command, failure) ?? failure)
@@ -435,12 +456,12 @@ export async function runFacePipeline(
       for (const line of lines) {
         const encodedProgress = ffmpegProgress(line, duration)
         if (encodedProgress !== null) {
-          const progress = enhancing ? Math.max(latestProgress, encodedProgress) : encodedProgress
+          const progress = upscaling ? Math.max(latestProgress, encodedProgress) : encodedProgress
           latestProgress = progress
           maskingStarted = true
           // Encoding-context callers provide the final encoder label. Detection
           // hardware remains diagnostic and must not replace that label.
-          const processingLabel = (enhancing ? enhancementLabel : encodingProcessingLabel)
+          const processingLabel = (upscaling ? upscaleLabel : encodingProcessingLabel)
             ?? (lastAnalysisStatus === 'cached' ? cachedFaceMessage
               : lastAnalysisStatus === 'detected' ? faceAnalysisMessage(inferenceHardwareLabel) : label)
           emit({ id, kind: 'export', state: 'running', progress, message: `${prefix}${processingLabel}: ${Math.round(progress * 100)}%`, phase: defaultPhase })

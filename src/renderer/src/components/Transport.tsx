@@ -1,5 +1,5 @@
 import type { EditSession } from '@shared/types'
-import { formatTime } from '../model/timeline'
+import { formatTime, markAtBoundary, type MarkSide } from '../model/timeline'
 
 interface TransportProps {
   session: EditSession
@@ -12,7 +12,7 @@ interface TransportProps {
   onZoom: (zoom: number) => void
   onStep: (direction: -1 | 1) => void
   onAddMark: () => void
-  onClearMarks: () => void
+  onClearMark: (side: MarkSide) => void
   onRemoveMarked: () => void
   onUndo: () => void
   onRedo: () => void
@@ -24,11 +24,13 @@ function PlayButton({ playing, onChange }: { playing: boolean; onChange: (playin
 }
 
 export function Transport(props: TransportProps): React.JSX.Element {
+  const canClearLeft = markAtBoundary(props.session, 'left') !== undefined
+  const canClearRight = markAtBoundary(props.session, 'right') !== undefined
   return <div className="transport">
     <button className="transport-step" onClick={() => props.onStep(-1)} aria-label="Previous frame" title="Previous frame (Shift+Left)">|◀</button>
     <PlayButton playing={props.playing} onChange={props.onPlayingChange} />
     <button className="transport-step" onClick={() => props.onStep(1)} aria-label="Next frame" title="Next frame (Shift+Right)">▶|</button>
-    <button onClick={props.onAddMark}>Mark</button><button disabled={props.session.marks.length === 0} onClick={props.onClearMarks} title="Clear the highlighted section's marks">Clear Marks</button><button className="danger" disabled={props.session.marks.length === 0} onClick={props.onRemoveMarked}>Remove Marked</button>
+    <button onClick={props.onAddMark}>Mark</button><button className="transport-clear-mark transport-clear-left" aria-label="Clear left mark" disabled={!canClearLeft} onClick={() => props.onClearMark('left')} title="Clear the highlighted section's left mark">Clear left mark</button><button className="transport-clear-mark transport-clear-right" aria-label="Clear right mark" disabled={!canClearRight} onClick={() => props.onClearMark('right')} title="Clear the highlighted section's right mark">Clear right mark</button><button className="danger" disabled={props.session.marks.length === 0} onClick={props.onRemoveMarked}>Remove Marked</button>
     <button className="transport-undo" disabled={!props.canUndo} onClick={props.onUndo} aria-label="Undo" title="Undo (Ctrl+Z)">↶</button><button disabled={!props.canRedo} onClick={props.onRedo} aria-label="Redo" title="Redo (Ctrl+Shift+Z)">↷</button>
     <span className="timeline-title">Timeline</span><span className="timeline-time">{formatTime(props.session.playhead, props.session.canvas.fps)} / {formatTime(props.total, props.session.canvas.fps)}</span>
     <button disabled={props.zoom <= 1} onClick={() => props.onZoom(Math.max(1, props.zoom - 0.25))} aria-label="Zoom out">−</button><button disabled={props.zoom >= 8} onClick={() => props.onZoom(Math.min(8, props.zoom + 0.25))} aria-label="Zoom in">+</button>

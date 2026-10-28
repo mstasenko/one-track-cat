@@ -67,9 +67,8 @@ function preparationDecoder(): FaceCommand {
 function delayedPreparationWorker(): FaceCommand {
   return {
     ...node([
-      "setTimeout(() => process.stderr.write('otc-face-blur: starting\\n'), 80)",
       'process.stdin.resume()',
-      "process.stdin.on('end', () => { process.stdout.write('frame'); process.stdout.end() })"
+      "process.stdin.on('end', () => { process.stderr.write('otc-face-blur: starting\\n'); process.stdout.write('frame'); process.stdout.end() })"
     ].join(';')),
     elevated: true
   }
@@ -234,7 +233,7 @@ describe('elevated face worker status', () => {
       node("process.stdout.write('frame'); process.stdout.end()"), delayedWorker(true), encoder()
     ], 'elevated-status-device', 1)
     try {
-      await delay(400)
+      await pending
       expect(progressReports(send)).toContainEqual(expect.objectContaining({
         state: 'running', message: 'Preparing video frames…'
       }))

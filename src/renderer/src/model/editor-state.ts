@@ -3,6 +3,7 @@ import type {
   EditSession,
   FaceBlurSettings,
   FocusZoomAmount,
+  FocusZoomMode,
   FreezeDuration,
   GpuDiagnostics,
   InsertTransitions,
@@ -13,6 +14,7 @@ import type {
   VideoSpeed,
   VideoTransition
 } from '@shared/types'
+import type { MarkSide } from './timeline'
 
 export interface EditorState {
   initialized: boolean
@@ -32,7 +34,7 @@ export interface EditorState {
   resetProject: () => Promise<void>
   setPlayhead: (time: number) => void
   addMark: () => void
-  clearMarks: () => void
+  clearMark: (side: MarkSide) => void
   removeMarked: () => void
   addText: () => void
   addAsset: (asset: AssetItem) => Promise<void>
@@ -45,7 +47,7 @@ export interface EditorState {
   cancelOverlayGesture: () => void
   removeSelectedOverlay: () => void
   setSpeed: (rate: VideoSpeed) => void
-  addFocusZoom: (zoom: FocusZoomAmount, focusX: number, focusY: number, transitionDuration?: number) => void
+  addFocusZoom: (zoom: FocusZoomAmount, focusX: number, focusY: number, transitionDuration?: number, mode?: FocusZoomMode) => void
   nudgeShortFrame: (direction: ShortFrameDirection) => void
   removeFocusZoom: () => void
   applyVideoTransition: (into?: VideoTransition, out?: VideoTransition) => void

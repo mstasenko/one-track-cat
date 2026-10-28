@@ -1,13 +1,17 @@
 import type { ExportRequest } from '../types'
-import { timelineDuration } from '../segment-time'
+import { segmentOutputDuration, timelineDuration } from '../segment-time'
 import { fitVideoRangeTransition } from '../video-range-transition'
 
 function seconds(value: number): string {
   return Math.max(0, value).toFixed(6)
 }
 
+function linearRamp(time: string, start: number, duration: number): string {
+  return `min(1,max(0,((${time})-${seconds(start)})/${seconds(duration)}))`
+}
+
 function smoothRamp(time: string, start: number, duration: number): string {
-  const progress = `min(1,max(0,((${time})-${seconds(start)})/${seconds(duration)}))`
+  const progress = linearRamp(time, start, duration)
   return `(${progress}*${progress}*(3-2*${progress}))`
 }
 
@@ -20,7 +24,7 @@ function activeWeight(weights: string[], time: string): string {
   return weights.map((weight) => weight.replaceAll(time, 't')).join('+')
 }
 
-function frameBlend(name: string, weights: string[], initialOpacity: number, time: string): string {
+function frameBlend(name: string, weights: string[], initialOpacity: number, time: string, shortest = false): string {
   const weight = weights.length === 1 ? weights[0] : `max(${weights.join(',')})`
   // Evaluate once per frame, not once per pixel. Send after blending to avoid
   // framesync read-ahead applying future opacity to buffered frames. The command
@@ -31,12 +35,48 @@ function frameBlend(name: string, weights: string[], initialOpacity: number, tim
   // Set planes directly: FFmpeg's all_opacity command does not restore 1.0.
   const commands = planes.map((plane) => `[expr] blend@${name} c${plane}_opacity ${opacity}`).join(',')
   // Keep sendcmd priming the next frame, but bypass per-pixel blending between transition edges.
-  return `blend@${name}=all_mode=normal:${initial}:enable='gt(${activeWeight(weights, time)},0)',sendcmd=c='0 ${commands}'`
+  return `blend@${name}=all_mode=normal:${initial}${shortest ? ':shortest=1' : ''}:enable='gt(${activeWeight(weights, time)},0)',sendcmd=c='0 ${commands}'`
+}
+
+function nextFrameTime(fps: number): string {
+  return `(round((round(T*${fps})+1)*1000000/${fps})/1000000)`
+}
+
+/** Keep crossfades in the native 4:2:0 timeline format. xfade
+ * otherwise creates full-resolution 4:4:4 pools for every cut. */
+export function clipFadeFilter(name: string, duration: number, fps: number, effect: 'fade' | 'dissolve' = 'fade'): string {
+  const time = nextFrameTime(fps)
+  const frameDuration = Math.max(1, Math.round(duration * fps)) / fps
+  const weight = effect === 'fade' ? smoothRamp(time, 0, frameDuration) : linearRamp(time, 0, frameDuration)
+  return `${frameBlend(name, [weight], 1, time, true)},format=yuv420p`
+}
+
+/** One blur buffer for all soft joins, rather than one full-resolution pool per cut.
+ * Blurring a crossfade is equivalent to blurring both sources with the same sigma. */
+export function addClipDissolveFilter(filters: string[], request: ExportRequest, input: string): string {
+  const time = nextFrameTime(request.canvas.fps)
+  const weights: string[] = []
+  let start = 0
+  for (const segment of request.segments) {
+    if (segment.kind !== 'freeze' && segment.transition?.effect === 'dissolve') {
+      const progress = linearRamp(time, start, segment.transition.duration)
+      weights.push(`10*${progress}*(1-${progress})`)
+    }
+    start += segmentOutputDuration(segment)
+  }
+  if (weights.length === 0) return input
+  // Each join stays inside its incoming clip, so these blur intervals cannot overlap.
+  const sigma = weights.join('+').replaceAll(',', '\\\\,')
+  filters.push(
+    `[${input}]gblur@clipdissolve=sigma=0:sigmaV=0:steps=2:enable='gt(${activeWeight(weights, time)},0)',` +
+    `sendcmd=c='0 [expr] gblur@clipdissolve sigma ${sigma},[expr] gblur@clipdissolve sigmaV ${sigma}'[clipdissolve]`
+  )
+  return 'clipdissolve'
 }
 
 export function addVideoRangeTransitionFilters(filters: string[], request: ExportRequest, input: string): string {
   let current = input
-  const nextTime = `(round((round(T*${request.canvas.fps})+1)*1000000/${request.canvas.fps})/1000000)`
+  const nextTime = nextFrameTime(request.canvas.fps)
   for (const [index, rawEffect] of (request.videoTransitions ?? []).entries()) {
     const effect = fitVideoRangeTransition(rawEffect)
     const fadeWeights: string[] = []

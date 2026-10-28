@@ -8,14 +8,14 @@ vi.mock('electron', () => ({
   app: { isPackaged: false, getPath: () => process.cwd() },
   BrowserWindow: { getAllWindows: () => [] }
 }))
-vi.mock('./ai-pack', () => ({ requireAiPack: vi.fn() }))
-vi.mock('./ai-export', () => ({ encodeWithAi: vi.fn() }))
+vi.mock('./upscale-pack', () => ({ requireUpscalePack: vi.fn() }))
+vi.mock('./upscale-export', () => ({ encodeWithUpscale: vi.fn() }))
 vi.mock('./export-encoder', () => ({
   exportEncoders: vi.fn(), softwareEncoder: vi.fn(), integratedDecodeDevice: vi.fn()
 }))
 vi.mock('./export-space', () => ({ ensureDiskSpace: vi.fn(), ensureFaceExportDiskSpace: vi.fn() }))
 vi.mock('./face-export', () => ({ encodeWithFaces: vi.fn() }))
-vi.mock('./face-worker', () => ({ restrictedIntelRenderNode: vi.fn() }))
+vi.mock('./intel-device', () => ({ restrictedIntelRenderNode: vi.fn() }))
 vi.mock('./privileged-export', () => ({ encodeWithPrivilegedGpu: vi.fn() }))
 vi.mock('./face-preview-cache', () => ({ tryReuseFacePreview: vi.fn() }))
 vi.mock('./jobs', () => ({ jobs: { run: vi.fn() } }))
@@ -86,6 +86,30 @@ function expectPreviewAndExportToMatch(effect: FocusZoomEffect, canvas: ExportRe
 }
 
 describe('focus zoom export filter', () => {
+  it('keeps default/frame zooms in zoompan and emits circles as a small transparent ring overlay', () => {
+    const canvas = { width: 320, height: 180, fps: 30, fit: 'contain' as const }
+    const frame = buildFilterGraph(request({}, canvas), [])
+    const explicitFrame = buildFilterGraph(request({ mode: 'frame' }, canvas), [])
+    const circle = buildFilterGraph(request({ mode: 'circle', start: 0.2, duration: 1, focusX: 0, focusY: 1 }, canvas), [])
+
+    expect(frame.graph).toContain('zoompan=')
+    expect(explicitFrame.graph).toContain('zoompan=')
+    expect(circle.graph).not.toContain('zoompan=')
+    expect(circle.videoLabel).toBe('focusCircle0')
+    expect(circle.graph).toContain('color=c=black@0.0:s=79x79:r=30:d=1.000000,setpts=PTS+0.200000/TB')
+    expect(circle.graph).not.toContain('crop=40:40:0:140')
+    expect(circle.graph).not.toContain('scale=79:79:flags=lanczos')
+    expect(circle.graph).toContain("format=rgba,geq=r='")
+    expect(circle.graph).toContain('atan2')
+    expect(circle.graph).toContain('(T-0.200000)/0.500000')
+    expect(circle.graph).toContain(":enable='between(t\\,0.200000\\,1.200000)'")
+    expect(circle.graph).toContain('eof_action=pass:repeatlast=1')
+    expect(circle.graph).toContain(':format=rgb:enable=')
+    const smaller = buildFilterGraph(request({ mode: 'circle', zoom: 4 }, canvas), [])
+    expect(smaller.graph).toContain('color=c=black@0.0:s=40x40:')
+    expect(smaller.graph).not.toContain('zoompan=')
+  })
+
   it('uses shared preview/export ramps across ramp-in, hold, ramp-out, and the exact end', () => {
     const canvas = { width: 320, height: 180, fps: 29.97, fit: 'contain' as const }
     const defaultEffect: FocusZoomEffect = { id: 'default', start: 0.125, duration: 1.75, zoom: 4, focusX: 0.2, focusY: 0.8 }

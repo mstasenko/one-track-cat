@@ -2,15 +2,15 @@ import { createHash } from 'node:crypto'
 import { constants, createReadStream } from 'node:fs'
 import { lstat, mkdir, open, rm, link } from 'node:fs/promises'
 import { dirname } from 'node:path'
-import type { AiModelDownloadPhase, AiModelDownloadProgress } from '../types'
+import type { UpscaleModelDownloadPhase, UpscaleModelDownloadProgress } from '../types'
 
 import { isObject, normalizeArtifact, normalizeArtifacts, modelManifestArtifacts,
   type ModelArtifact, type ModelManifest, type NormalizedArtifact } from './model-download-schema'
 export { parseModelManifest, readModelManifest, modelArtifactDestination, modelManifestArtifacts } from './model-download-schema'
 export type { ModelArtifact, ModelManifestArtifact, ModelManifest } from './model-download-schema'
 
-export type ModelDownloadPhase = AiModelDownloadPhase
-export type ModelDownloadProgress = AiModelDownloadProgress
+export type ModelDownloadPhase = UpscaleModelDownloadPhase
+export type ModelDownloadProgress = UpscaleModelDownloadProgress
 
 export type ModelDownloadProgressCallback = (progress: ModelDownloadProgress) => void
 

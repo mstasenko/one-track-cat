@@ -1,17 +1,26 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { FaceBlurEffect, JobProgress, MediaMetadata } from '@shared/types'
+import type { AudioOverlay, FaceBlurEffect, JobProgress, MediaMetadata } from '@shared/types'
 import type { EditorState } from '../model/editor-state'
 import { createSession } from '../model/timeline'
 import { EditorWorkspace, Welcome } from './AppLayout'
 import { ExportProgress } from './ExportProgress'
 
-vi.mock('./AssetPanel', () => ({ AssetPanel: () => <div data-testid="asset-panel" /> }))
+vi.mock('./AssetPanel', () => ({ AssetPanel: ({ onFocusPick }: { onFocusPick?: (zoom: 3, transitionDuration: number, mode: 'circle') => void }) => <>
+  <div data-testid="asset-panel" />
+  <button data-testid="asset-focus-circle" onClick={() => onFocusPick?.(3, 0.5, 'circle')}>Circle focus</button>
+</> }))
 vi.mock('./Preview', () => ({
-  Preview: ({ onPlayhead }: { onPlayhead: (time: number) => void }) => (
+  Preview: ({ onPlayhead, onFocusZoom, onClearMark }: {
+    onPlayhead: (time: number) => void
+    onFocusZoom?: (zoom: 3, focusX: number, focusY: number) => void
+    onClearMark?: (side: 'left' | 'right') => void
+  }) => <>
     <button data-testid="preview-playhead" onClick={() => onPlayhead(3)}>Preview playhead</button>
-  )
+    <button data-testid="preview-focus-circle" onClick={() => onFocusZoom?.(3, 0.25, 0.75)}>Preview focus</button>
+    <button data-testid="preview-clear-left" onClick={() => onClearMark?.('left')}>Preview clear left</button>
+  </>
 }))
 vi.mock('./Timeline', () => ({
   Timeline: ({ onSeek, onNudgeFrame }: { onSeek: (time: number) => void; onNudgeFrame: (direction: 'left' | 'right') => void }) => <>
@@ -59,7 +68,8 @@ function workspaceProps(overrides: Partial<WorkspaceProps> = {}): WorkspaceProps
     history: [],
     future: [],
     setPlayhead: vi.fn(),
-    selectOverlay: vi.fn()
+    selectOverlay: vi.fn(),
+    addFocusZoom: vi.fn()
   } as unknown as EditorState
   return {
     store,
@@ -111,7 +121,7 @@ afterEach(() => {
 describe('export progress scanner', () => {
   it.each([
     ['queued', 'Queued'], ['starting', 'Starting'], ['preparing', 'Preparing'],
-    ['masking', 'Masking faces'], ['enhancing', 'AI enhancing video'], ['encoding', 'Encoding video'],
+    ['masking', 'Masking faces'], ['upscaling', 'Upscaling video'], ['encoding', 'Encoding video'],
     ['finalizing', 'Finalizing export'], ['complete', 'Complete']
   ] as const)('describes the %s stage', (phase, expected) => {
     const app = renderProgress({ job: { ...runningJob, phase, message: '' } })
@@ -183,18 +193,18 @@ describe('export progress scanner', () => {
     expect(app.querySelector('[data-testid="export-eta"]')?.textContent).toBe('Stage ETA: 12s remaining')
   })
 
-  it('shows the AI enhancement device and stage ETA in the shared progress dialog', () => {
+  it('shows the Upscaling device and stage ETA in the shared progress dialog', () => {
     const app = renderProgress({ job: {
       ...runningJob,
-      phase: 'enhancing',
+      phase: 'upscaling',
       progress: 0.5,
-      message: 'AI enhancing video using dGPU: 50%',
+      message: 'Upscaling video using dGPU: 50%',
       hardwareLabel: 'dGPU',
       etaSeconds: 12
     } })
 
-    expect(app.querySelector('p')?.textContent).toBe('AI enhancing video using dGPU: 50%')
-    expect(app.querySelector('[data-testid="export-phase"]')?.textContent).toBe('Phase: AI enhancing video')
+    expect(app.querySelector('p')?.textContent).toBe('Upscaling video using dGPU: 50%')
+    expect(app.querySelector('[data-testid="export-phase"]')?.textContent).toBe('Phase: Upscaling video')
     expect(app.querySelector('[data-testid="export-eta"]')?.textContent).toBe('Stage ETA: 12s remaining')
   })
 
@@ -237,6 +247,43 @@ describe('export progress scanner', () => {
 })
 
 describe('editor workspace playback callbacks', () => {
+  it('forwards the selected circle view through focus picking to the store', () => {
+    const addFocusZoom = vi.fn()
+    const app = renderWorkspace({ store: { ...workspaceProps().store, addFocusZoom } })
+    const chooseCircle = app.querySelector<HTMLButtonElement>('[data-testid="asset-focus-circle"]')
+    const pickFocus = app.querySelector<HTMLButtonElement>('[data-testid="preview-focus-circle"]')
+    if (!chooseCircle || !pickFocus) throw new Error('circle focus controls missing')
+    act(() => { chooseCircle.click() })
+    act(() => { pickFocus.click() })
+    expect(addFocusZoom).toHaveBeenCalledWith(3, 0.25, 0.75, 0.5, 'circle')
+  })
+
+  it('forwards the selected mark side to the store', () => {
+    const clearMark = vi.fn()
+    const app = renderWorkspace({ store: { ...workspaceProps().store, clearMark } })
+    const clear = app.querySelector<HTMLButtonElement>('[data-testid="preview-clear-left"]')
+    if (!clear) throw new Error('clear mark callback missing')
+    act(() => { clear.click() })
+    expect(clearMark).toHaveBeenCalledWith('left')
+  })
+
+  it.each([[true, 2, true], [true, 5, false], [false, 2, false]] as const)(
+    'leaves narration %s of duration %s only on an intentional seek outside it', (narration, duration, clears) => {
+      const selected: AudioOverlay = { id: 'voice', type: 'audio', name: 'Audio', path: '/voice.wav',
+        start: 0, duration, sourceIn: 0, volume: 1, zIndex: 0,
+        ...(narration ? { narration: { draftId: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', enabled: true } } : {}) }
+      const props = workspaceProps({ selected })
+      const app = renderWorkspace(props)
+      const preview = app.querySelector<HTMLButtonElement>('[data-testid="preview-playhead"]')
+      const timeline = app.querySelector<HTMLButtonElement>('[data-testid="timeline-seek"]')
+      act(() => { preview?.click() })
+      expect(props.store.selectOverlay).not.toHaveBeenCalled()
+      act(() => { timeline?.click() })
+      if (clears) expect(props.store.selectOverlay).toHaveBeenCalledWith(null)
+      else expect(props.store.selectOverlay).not.toHaveBeenCalled()
+    }
+  )
+
   it('pauses playback before setting a Short frame point', () => {
     const onPlayingChange = vi.fn()
     const nudgeShortFrame = vi.fn()

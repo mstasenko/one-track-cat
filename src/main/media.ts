@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
-import { mkdir, readdir, rename, rm, stat } from 'node:fs/promises'
+import { lstat, mkdir, readdir, rename, rm, stat } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 import { promisify } from 'node:util'
 import { app } from 'electron'
@@ -13,7 +13,12 @@ const waveformCache = new Map<string, Promise<number[]>>()
 const proxyJobs = new Map<string, Promise<string>>()
 let proxyQueue: Promise<void> = Promise.resolve()
 let proxyClosed = false
+let proxyCacheClearing = false
 const PROXY_SHUTDOWN_MESSAGE = 'Proxy generation cancelled during shutdown'
+const PROXY_CACHE_CLEAR_MESSAGE = 'Proxy cache is being cleared'
+const proxyKeyPattern = /^[0-9a-f]{24}\.mp4$/
+const proxyUuid = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+const proxyTemporaryPattern = new RegExp(`^\\.[0-9a-f]{24}\\.${proxyUuid}\\.partial\\.mp4$`)
 // Preserve short-range detail without sending raw PCM across IPC.
 const MAX_WAVEFORM_PEAKS = 50_000
 const MAX_WAVEFORM_CACHE_ENTRIES = 32
@@ -185,6 +190,31 @@ export function proxyCacheKey(metadata: MediaMetadata): string {
     .slice(0, 24)
 }
 
+function proxyCacheDirectory(): string {
+  const cacheRoot = process.env.XDG_CACHE_HOME ?? join(app.getPath('home'), '.cache')
+  return join(cacheRoot, 'otc', 'proxies')
+}
+
+/** Remove only this app's hashed proxy artifacts after a project reset. */
+export async function clearProxyCache(): Promise<void> {
+  if (proxyCacheClearing || proxyJobs.size > 0) return
+  proxyCacheClearing = true
+  try {
+    const directory = proxyCacheDirectory()
+    const cacheRoot = process.env.XDG_CACHE_HOME ?? join(app.getPath('home'), '.cache')
+    const ownedDirectories = [cacheRoot, join(cacheRoot, 'otc'), directory]
+    const stats = await Promise.all(ownedDirectories.map((path) => lstat(path).catch(() => undefined)))
+    if (stats.some((value) => !value?.isDirectory())) return
+    const entries = await readdir(directory, { withFileTypes: true })
+    const paths = entries
+      .filter((entry) => entry.isFile() && (proxyKeyPattern.test(entry.name) || proxyTemporaryPattern.test(entry.name)))
+      .map((entry) => join(directory, entry.name))
+    await Promise.all(paths.map((path) => rm(path, { force: true }).catch(() => undefined)))
+  } finally {
+    proxyCacheClearing = false
+  }
+}
+
 async function validProxy(path: string): Promise<boolean> {
   try {
     const [file, probe] = await Promise.all([stat(path), readProbe(path)])
@@ -220,8 +250,7 @@ export async function pruneProxyCache(
 }
 
 async function generateProxy(metadata: MediaMetadata): Promise<string> {
-  const cacheRoot = process.env.XDG_CACHE_HOME ?? join(app.getPath('home'), '.cache')
-  const cacheDirectory = join(cacheRoot, 'otc', 'proxies')
+  const cacheDirectory = proxyCacheDirectory()
   await mkdir(cacheDirectory, { recursive: true })
   const key = proxyCacheKey(metadata)
   const outputPath = join(cacheDirectory, `${key}.mp4`)
@@ -250,6 +279,7 @@ export function createProxy(metadata: MediaMetadata): Promise<string> {
   const existing = proxyJobs.get(key)
   if (existing) return existing
   if (proxyClosed) return Promise.reject(new Error(PROXY_SHUTDOWN_MESSAGE))
+  if (proxyCacheClearing) return Promise.reject(new Error(PROXY_CACHE_CLEAR_MESSAGE))
 
   const scheduled = proxyQueue.then(async () => {
     if (proxyClosed) throw new Error(PROXY_SHUTDOWN_MESSAGE)

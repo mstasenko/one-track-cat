@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 const electronMock = vi.hoisted(() => ({ app: { isPackaged: false, getPath: vi.fn(() => '/apps/otc') } }))
 vi.mock('electron', () => electronMock)
 import { facePackDirectory, facePackStatus, requireFacePack } from './face-pack'
+import faceSources from '../../assets/face/sources.json'
 
 let directory: string | undefined
 afterEach(async () => {
@@ -14,6 +15,18 @@ afterEach(async () => {
   delete process.env.APPIMAGE
 })
 describe('optional face pack lookup', () => {
+  it('enables a runtime-only pack without downloading or requiring its weights', async () => {
+    directory = await mkdtemp(join(tmpdir(), 'otc-face-runtime-'))
+    await writeFile(join(directory, 'manifest.json'), '{"format":1}')
+    await writeFile(join(directory, 'sources.json'), JSON.stringify(faceSources))
+    await writeFile(join(directory, 'otc-face-blur'), '', { mode: 0o755 })
+    expect(await requireFacePack(directory)).toEqual({ executable: join(directory, 'otc-face-blur'),
+      model: join('/apps/otc/otc-face-models', faceSources.modelId, 'model.xml'), catalog: join(directory, 'sources.json') })
+    await writeFile(join(directory, 'sources.json'), JSON.stringify({ ...faceSources, modelId: 'other' }))
+    await expect(requireFacePack(directory)).rejects.toThrow('requires the optional')
+    await writeFile(join(directory, 'sources.json'), JSON.stringify({ ...faceSources, artifacts: faceSources.artifacts.slice(0, 1) }))
+    await expect(requireFacePack(directory)).rejects.toThrow('requires the optional')
+  })
   it('uses the development sidecar without loading any inference runtime', () => {
     expect(facePackDirectory()).toBe(join(process.cwd(), 'dist', 'face-pack'))
   })

@@ -111,9 +111,9 @@ describe('FFmpeg export graph', () => {
     const prepared = prepareTimelineInputs(request, args)
 
     expect(args).toEqual([
-      '-ss', '2.000000', '-t', '5.000000', '-threads', '4', '-i', '/game.mp4',
-      '-ss', '10.000000', '-t', '4.000000', '-threads', '4', '-i', '/game.mp4',
-      '-ss', '16.000000', '-t', '1', '-threads', '4', '-i', '/game.mp4'
+      '-ss', '2.000000', '-t', '5.000000', '-threads', '1', '-i', '/game.mp4',
+      '-ss', '10.000000', '-t', '4.000000', '-threads', '1', '-i', '/game.mp4',
+      '-ss', '16.000000', '-t', '1', '-threads', '1', '-i', '/game.mp4'
     ])
     expect(prepared.sources.map((item) => item.id)).toEqual([
       'export-segment-0', 'export-segment-1', 'export-segment-2'
@@ -378,7 +378,9 @@ describe('FFmpeg export graph', () => {
     expect(graph).toContain('[vseg0]split=2[vprefix1][voutgoing1]')
     expect(graph).toContain('[vprefix1]trim=end=2.000000,setpts=PTS-STARTPTS,settb=AVTB[vprefix1trimmed]')
     expect(graph).toContain('[voutgoing1]trim=start=2.000000:duration=0.350000,setpts=PTS-STARTPTS,settb=AVTB,fps=24[voutgoing1trimmed]')
-    expect(graph).toContain("[voutgoing1trimmed][vincoming1trimmed]xfade=transition=custom:expr='A*(P*P*(3-2*P))+B*(1-P*P*(3-2*P))':duration=0.350000:offset=0[vmixed1]")
+    expect(graph).toContain("[voutgoing1trimmed][vincoming1trimmed]blend@vfade1=all_mode=normal:c0_opacity=1:c1_opacity=1:c2_opacity=1:c3_opacity=1:shortest=1:enable='gt(")
+    expect(graph).toContain("sendcmd=c='0 [expr] blend@vfade1")
+    expect(graph).toContain('format=yuv420p[vmixed1]')
     expect(graph).toContain('[vprefix1trimmed][vmixed1][vremainder1trimmed]concat=n=3:v=1:a=0[vjoin1]')
     expect(graph).toContain('[vjoin1]split=2[vprefix2][voutgoing2]')
     expect(graph).toContain('[voutgoing2trimmed][vincoming2trimmed]xfade=transition=circleopen:duration=0.650000:offset=0[vmixed2]')

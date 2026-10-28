@@ -7,7 +7,7 @@ import { ExportProgress } from './ExportProgress'
 let root: Root
 let container: HTMLDivElement
 const job: JobProgress = { id: 'export', kind: 'export', state: 'running', progress: 0.4,
-  message: 'AI enhancing video using dGPU: 40%', phase: 'enhancing', etaSeconds: 100 }
+  message: 'Upscaling video using dGPU: 40%', phase: 'upscaling', etaSeconds: 100 }
 
 beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
@@ -40,7 +40,7 @@ describe('Export progress', () => {
     expect(button.textContent).toBe('Cancelling…')
     expect(container.textContent).toContain('waiting for processing to stop safely')
     expect(container.textContent).not.toContain('100s remaining')
-    render({ ...job, progress: 0.5, message: 'AI enhancing video: 50%' })
+    render({ ...job, progress: 0.5, message: 'Upscaling video: 50%' })
     expect(button.disabled).toBe(true)
     act(() => button.click())
     expect(cancelJob).toHaveBeenCalledOnce()

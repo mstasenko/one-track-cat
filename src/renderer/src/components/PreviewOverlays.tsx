@@ -2,11 +2,12 @@ import { useEffect, useRef } from 'react'
 import type { EditSession, Overlay, ProjectCanvas, VisualOverlayBase } from '@shared/types'
 import { overlayFit } from '@shared/overlay-fit'
 import { overlayAtTime, overlaySourceTime } from '../model/timeline'
-import { isAudioEnabledOverlay, overlayGainAtLocalTime } from '@shared/audio-envelope'
+import { previewOverlayGain } from '@shared/audio-envelope'
 import { mediaSource, overlayNeedsResync } from './preview-media'
 import type { PreviewAudioMixer } from './usePreviewAudioMixer'
 import { useMediaUrl } from './useMediaUrl'
 import { overlayAnimationStyle } from './overlay-animation'
+import { isNarrationSubtitle, narrationSubtitleVisible } from '../model/narration-subtitles'
 
 interface PreviewOverlaysProps {
   session: EditSession
@@ -33,6 +34,7 @@ function textStyle(overlay: Extract<Overlay, { type: 'text' }>): React.CSSProper
     fontSize: `${overlay.fontSize}cqh`,
     fontWeight: 700,
     textAlign: overlay.align,
+    paintOrder: 'stroke fill',
     WebkitTextStroke: `${overlay.outlineWidth}px ${overlay.outlineColor}`,
     textShadow: overlay.shadow ? '0 4px 8px #000' : 'none'
   }
@@ -92,13 +94,8 @@ function MediaContent({ overlay, outputTime, playing, mixer, canvas }: {
 }): React.JSX.Element {
   const url = useMediaUrl(overlayPath(overlay))
   const mediaRef = useRef<HTMLVideoElement | HTMLAudioElement>(null)
-  const audible = isAudioEnabledOverlay(overlay)
-  const gain = audible ? overlay.volume * overlayGainAtLocalTime(
-    overlay.duration,
-    overlay.fadeIn,
-    overlay.fadeOut,
-    outputTime - overlay.start
-  ) : undefined
+  const gain = previewOverlayGain(overlay, outputTime)
+  const audible = gain !== undefined
 
   useEffect(() => {
     const media = mediaRef.current
@@ -123,7 +120,7 @@ function MediaContent({ overlay, outputTime, playing, mixer, canvas }: {
     syncOverlayMedia(event.currentTarget, overlay, outputTime, playing)
   }
 
-  if (overlay.type === 'audio') return <audio ref={mediaRef} crossOrigin="anonymous" src={mediaSource(url)} onLoadedMetadata={onLoadedMetadata} />
+  if (overlay.type === 'audio') return <audio ref={mediaRef} muted={!audible} crossOrigin="anonymous" src={mediaSource(url)} onLoadedMetadata={onLoadedMetadata} />
   return <video ref={mediaRef as React.RefObject<HTMLVideoElement>} crossOrigin="anonymous" src={mediaSource(url)} style={{ objectFit: overlayFit(overlay, canvas), ...overlayAnimationStyle(overlay, outputTime) }} muted={overlay.type === 'gif' || !overlay.audioEnabled} loop={overlay.type === 'gif' || overlay.loop} playsInline onLoadedMetadata={onLoadedMetadata} />
 }
 
@@ -139,15 +136,17 @@ function OverlayContent(props: {
   return <MediaContent {...props} overlay={props.overlay} />
 }
 
-function VisualItem({ overlay, children, selected, props }: {
+function VisualItem({ overlay, children, selected, props, interactive = true }: {
   overlay: VisualOverlayBase
   children: React.ReactNode
   selected: boolean
   props: PreviewOverlaysProps
+  interactive?: boolean
 }): React.JSX.Element {
   const drag = useRef<{ x: number; y: number; startX: number; startY: number } | null>(null)
   const resize = useRef<{ x: number; y: number; width: number; height: number } | null>(null)
   const onPointerMove = (event: React.PointerEvent): void => {
+    if (!interactive) return
     const rectangle = props.stageRef.current?.getBoundingClientRect()
     if (!rectangle) return
     if (drag.current) props.onChange(overlay.id, {
@@ -160,9 +159,11 @@ function VisualItem({ overlay, children, selected, props }: {
     })
   }
   return <div
-    className={`visual-overlay ${selected ? 'selected' : ''}`}
-    style={{ left: `${overlay.x * 100}%`, top: `${overlay.y * 100}%`, width: `${overlay.width * 100}%`, height: `${overlay.height * 100}%`, opacity: overlay.opacity, zIndex: overlay.zIndex }}
+    className={`visual-overlay ${selected && interactive ? 'selected' : ''}`}
+    style={{ left: `${overlay.x * 100}%`, top: `${overlay.y * 100}%`, width: `${overlay.width * 100}%`, height: `${overlay.height * 100}%`, opacity: overlay.opacity, zIndex: overlay.zIndex,
+      pointerEvents: interactive ? undefined : 'none' }}
     onPointerDown={(event) => {
+      if (!interactive) return
       props.onSelect(overlay.id)
       props.onGestureStart()
       drag.current = { x: overlay.x, y: overlay.y, startX: event.clientX, startY: event.clientY }
@@ -170,19 +171,21 @@ function VisualItem({ overlay, children, selected, props }: {
     }}
     onPointerMove={onPointerMove}
     onPointerUp={(event) => {
+      if (!interactive) return
       drag.current = null
       resize.current = null
       event.currentTarget.releasePointerCapture(event.pointerId)
       props.onGestureEnd()
     }}
     onPointerCancel={() => {
+      if (!interactive) return
       drag.current = null
       resize.current = null
       props.onGestureCancel()
     }}
   >
     {children}
-    {selected && <button className="resize-handle" aria-label="Resize overlay" onPointerDown={(event) => {
+    {interactive && selected && <button className="resize-handle" aria-label="Resize overlay" onPointerDown={(event) => {
       event.stopPropagation()
       props.onGestureStart()
       resize.current = { x: event.clientX, y: event.clientY, width: overlay.width, height: overlay.height }
@@ -192,10 +195,12 @@ function VisualItem({ overlay, children, selected, props }: {
 }
 
 export function PreviewOverlays(props: PreviewOverlaysProps): React.JSX.Element {
-  const overlays = props.session.overlays.filter((overlay) => overlayAtTime(overlay, props.outputTime))
+  const overlays = props.session.overlays.filter((overlay) => overlayAtTime(overlay, props.outputTime) &&
+    narrationSubtitleVisible(overlay, props.session.overlays))
   return <>{overlays.map((overlay) => overlay.type === 'audio'
     ? <OverlayContent key={overlay.id} canvas={props.session.canvas} overlay={overlay} outputTime={props.outputTime} playing={props.playing} mixer={props.mixer} />
-    : <VisualItem key={overlay.id} overlay={overlay} selected={props.session.selectedOverlayId === overlay.id} props={props}>
+    : <VisualItem key={overlay.id} overlay={overlay} interactive={!isNarrationSubtitle(overlay)}
+        selected={props.session.selectedOverlayId === overlay.id} props={props}>
         <OverlayContent canvas={props.session.canvas} overlay={overlay} outputTime={props.outputTime} playing={props.playing} mixer={props.mixer} />
       </VisualItem>)}</>
 }

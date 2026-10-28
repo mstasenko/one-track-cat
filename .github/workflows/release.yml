@@ -44,9 +44,6 @@ jobs:
           npm run package
           npm run build:face-pack
           otc_CPU_ONLY=1 npm run verify:face-pack
-          otc_CPU_ONLY=1 otc_FACE_PACK_TEST=1 \
-            otc_FACE_FIXTURE_PATH="$PWD/dist/face-pack-cache/fixtures/large.ppm" \
-            npx vitest run src/main/face-export-real.test.ts
           # Bound the source compiler and its children; keep artifacts runner-owned.
           sudo systemd-run --wait --pipe --collect \
             --uid="$(id -u)" --gid="$(id -g)" --working-directory="$PWD" \
@@ -54,8 +51,9 @@ jobs:
             --setenv=PATH="$PATH" npm run build:upscale-pack
           otc_CPU_ONLY=1 npm run verify:upscale-pack
           # No learned checkpoints or whole-4K CPU restoration in small-pack CI.
-          # Full Electron/FFmpeg spatial/audio/metadata coverage is qualified separately.
+          # Exercise native stream handling, then real FFmpeg/audio/cache composition.
           otc_CPU_ONLY=1 node scripts/smoke-upscale-pack.mjs
+          npm run test:packs
           cd release
           sha256sum ./*.AppImage ./*.zip > SHA256SUMS
 

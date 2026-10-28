@@ -8,6 +8,7 @@ vi.mock('electron', () => ({ app: { isPackaged: false } }))
 describe('frame-evaluated overlay alpha', () => {
   it('uses a constant multiplier when there is no opacity animation', () => {
     expect(frameAlphaFilter('overlay0', 0.6, '1')).toBe('colorchannelmixer=aa=0.6')
+    expect(frameAlphaFilter('overlay0', 1, '1')).toBe('null')
   })
 
   it('preserves RGB and existing transparency while updating every frame', () => {

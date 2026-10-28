@@ -16,7 +16,7 @@ function savedSnapshot(marks: number[] = [1, 2]): Record<string, unknown> {
       { id: 'first', sourceId: 'source', sourceStart: 0, sourceEnd: 1 },
       {
         id: 'segment', sourceId: 'source', sourceStart: 1, sourceEnd: 3,
-        transition: { effect: 'circleopen', duration: 0.5 }
+        transition: { effect: 'spin', duration: 0.5 }
       }
     ],
     overlays: [], selectedOverlayId: null, playhead: 1, marks,
@@ -60,17 +60,17 @@ describe('IPC input validation', () => {
     for (const shortFramePosition of [-0.05, 1.05, Number.NaN]) {
       expect(() => parseExportRequest({ ...request, canvas: { ...request.canvas, shortFramePosition } })).toThrow('Short frame position')
     }
-    expect(parseExportRequest({ ...request, aiEnhance: {} })).toMatchObject({ aiEnhance: {} })
-    expect(parseExportRequest({ ...request, aiEnhance: { mode: 'turbo' } })).toMatchObject({ aiEnhance: { mode: 'turbo' } })
-    expect(parseExportRequest({ ...request, aiEnhance: { mode: 'base' } })).toMatchObject({ aiEnhance: { mode: 'base' } })
+    expect(parseExportRequest({ ...request, upscale: {} })).toMatchObject({ upscale: {} })
+    expect(parseExportRequest({ ...request, upscale: { mode: 'turbo' } })).toMatchObject({ upscale: { mode: 'turbo' } })
+    expect(parseExportRequest({ ...request, upscale: { mode: 'base' } })).toMatchObject({ upscale: { mode: 'base' } })
     for (const value of [true, false, 'yes', null, [], 1]) {
-      expect(() => parseExportRequest({ ...request, aiEnhance: value })).toThrow('AI enhancement')
+      expect(() => parseExportRequest({ ...request, upscale: value })).toThrow('Upscaling')
     }
     for (const value of [
       { mode: 'rife' }, { mode: 'temporal' }, { mode: 'per-frame' }, { mode: null }, { mode: undefined },
       { mode: 60 }, { mode: 'turbo', extra: true }, { spatial: true }
     ]) {
-      expect(() => parseExportRequest({ ...request, aiEnhance: value })).toThrow('AI enhancement')
+      expect(() => parseExportRequest({ ...request, upscale: value })).toThrow('Upscaling')
     }
     expect(() => parseExportRequest({
       ...request,
@@ -79,7 +79,7 @@ describe('IPC input validation', () => {
     expect(() => parseExportRequest({ ...request, segments: [{ id: 'bad', sourceId: 'source', sourceStart: 2, sourceEnd: 1 }] })).toThrow('positive')
     expect(() => parseExportRequest({
       ...request,
-      segments: [request.segments[0], { ...request.segments[1], transition: { effect: 'spin', duration: 1 } }]
+      segments: [request.segments[0], { ...request.segments[1], transition: { effect: 'invalid-transition', duration: 1 } }]
     })).toThrow('Transition effect')
     expect(() => parseExportRequest({
       ...request,
@@ -218,24 +218,21 @@ describe('IPC input validation', () => {
     const request = {
       canvas: { width: 320, height: 180, fps: 24, fit: 'contain' },
       sources: [{ id: 'source', metadata }], outputPath: '/edited.mp4', overlays: [],
-      segments: [{ kind: 'freeze', id: 'freeze', sourceId: 'source', sourceTime: 1, duration: 1, replayGroupId: 'replay-safe_1' }],
-      focusZooms: [{ id: 'zoom', start: 0, duration: 1, zoom: 1.5, focusX: 0.75, focusY: 0.25 }]
+      segments: [{ kind: 'freeze', id: 'freeze', sourceId: 'source', sourceTime: 1, duration: 1, replayGroupId: 'replay-safe_1' }], focusZooms: [{ id: 'zoom', start: 0, duration: 1, zoom: 1.5, focusX: 0.75, focusY: 0.25 }]
     }
     expect(parseExportRequest(request)).toEqual(request)
     for (const duration of [0.5, 1, 2, 3, 4, 5]) {
       expect(parseExportRequest({ ...request, segments: [{ ...request.segments[0], duration }], focusZooms: [] }).segments[0]).toMatchObject({ duration })
     }
-    for (const zoom of [1.5, 2, 3, 4, 5, 6, 7, 8, 9, 10]) {
+    for (const zoom of [1.5, 2, 3, 4, 5, 6, 7, 8, 9, 10])
       expect(parseExportRequest({ ...request, focusZooms: [{ ...request.focusZooms[0], zoom }] }).focusZooms?.[0]?.zoom).toBe(zoom)
-    }
     expect(() => parseExportRequest({ ...request, segments: [{ ...request.segments[0], duration: 6 }] })).toThrow('Freeze duration')
     expect(() => parseExportRequest({ ...request, segments: [{ ...request.segments[0], sourceTime: 4 }] })).toThrow('Freeze source time')
     expect(() => parseExportRequest({ ...request, focusZooms: [{ ...request.focusZooms[0], zoom: 1.25 }] })).toThrow('amount')
     expect(() => parseExportRequest({ ...request, focusZooms: [{ ...request.focusZooms[0], focusX: -1 }] })).toThrow('Focus x')
     expect(parseExportRequest({ ...request, focusZooms: [{ ...request.focusZooms[0], transitionDuration: 0.35 }] }).focusZooms?.[0]?.transitionDuration).toBe(0.35)
-    for (const transitionDuration of [0.049, 5.001, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, null, '0.5']) {
+    for (const transitionDuration of [0.049, 5.001, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, null, '0.5'])
       expect(() => parseExportRequest({ ...request, focusZooms: [{ ...request.focusZooms[0], transitionDuration }] })).toThrow('transition duration')
-    }
     expect(() => parseExportRequest({ ...request, focusZooms: [request.focusZooms[0], { ...request.focusZooms[0], id: 'overlap' }] })).toThrow('overlap')
     expect(() => parseExportRequest({ ...request, segments: [{ ...request.segments[0], replayGroupId: 'bad replay!' }] })).toThrow('Replay group ID')
   })
@@ -430,7 +427,7 @@ describe('IPC input validation', () => {
   it('validates restorable editor state', () => {
     const saved = savedSnapshot()
     expect(parseSavedSession(saved)).toEqual(saved)
-    expect(parseSavedSession({ ...saved, aiEnhance: {} })).not.toHaveProperty('aiEnhance')
+    expect(parseSavedSession({ ...saved, upscale: {} })).not.toHaveProperty('upscale')
     expect(parseSavedSession({ ...saved, dirty: true })).toEqual(saved)
     const legacyOverlay = {
       id: 'audio', type: 'audio', name: 'Effect', path: '/effect.wav', start: 2.5, duration: 1,

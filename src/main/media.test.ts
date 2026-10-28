@@ -1,4 +1,4 @@
-import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
@@ -36,6 +36,7 @@ let proxyVideoFilter: typeof import('./media').proxyVideoFilter
 let proxyArgs: typeof import('./media').proxyArgs
 let waveformFor: typeof import('./media').waveformFor
 let createProxy: typeof import('./media').createProxy
+let clearProxyCache: typeof import('./media').clearProxyCache
 let shutdownProxyJobs: typeof import('./media').shutdownProxyJobs
 const directories: string[] = []
 
@@ -43,7 +44,7 @@ beforeAll(async () => {
   ;({
     peaksFromPcm, displayDimensions, pruneProxyCache, proxyCacheKey,
     firstPositiveNumber, firstFrameRate,
-    proxyVideoFilter, proxyArgs, waveformFor, createProxy,
+    proxyVideoFilter, proxyArgs, waveformFor, createProxy, clearProxyCache,
     shutdownProxyJobs
   } = await import('./media'))
 })
@@ -100,6 +101,26 @@ describe('media waveform extraction', () => {
       '-pix_fmt', 'yuv420p', '-g', '60', '-c:a', 'aac', '-b:a', '96k',
       '-movflags', '+faststart', '-progress', 'pipe:1', '-nostats', '/cache/proxy.partial.mp4'
     ])
+  })
+
+  it('clears only hashed proxy artifacts and stale partials', async () => {
+    const cacheRoot = await mkdtemp(join(tmpdir(), 'otc-proxy-clear-'))
+    directories.push(cacheRoot)
+    const previousCacheRoot = process.env.XDG_CACHE_HOME
+    process.env.XDG_CACHE_HOME = cacheRoot
+    const directory = join(cacheRoot, 'otc', 'proxies')
+    await mkdir(directory, { recursive: true })
+    const uuid = '00000000-0000-0000-0000-000000000000'
+    await writeFile(join(directory, '0123456789abcdef01234567.mp4'), 'proxy')
+    await writeFile(join(directory, `.0123456789abcdef01234567.${uuid}.partial.mp4`), 'partial')
+    await writeFile(join(directory, 'other.mp4'), 'keep')
+    try {
+      await clearProxyCache()
+      await expect(readdir(directory)).resolves.toEqual(['other.mp4'])
+    } finally {
+      if (previousCacheRoot === undefined) delete process.env.XDG_CACHE_HOME
+      else process.env.XDG_CACHE_HOME = previousCacheRoot
+    }
   })
 
   it('deduplicates in-flight proxies by key and retries failed jobs', async () => {

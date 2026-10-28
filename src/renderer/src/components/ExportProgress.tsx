@@ -23,7 +23,7 @@ function progressPhase(job: JobProgress | null): string {
     case 'starting': return 'Starting'
     case 'preparing': return 'Preparing'
     case 'masking': return 'Masking faces'
-    case 'enhancing': return 'AI enhancing video'
+    case 'upscaling': return 'Upscaling video'
     case 'encoding': return 'Encoding video'
     case 'finalizing': return 'Finalizing export'
     case 'complete': return 'Complete'
