@@ -48,6 +48,7 @@
     "build:ffmpeg": "node scripts/build-ffmpeg.mjs",
     "build:face-pack": "node scripts/build-face-pack.mjs",
     "verify:face-pack": "node scripts/verify-face-pack.mjs",
+    "build:voice-pack": "node scripts/build-voice-pack.mjs",
     "build:ai-pack": "node scripts/build-ai-pack.mjs",
     "verify:ai-pack": "node scripts/verify-ai-pack.mjs"
   },

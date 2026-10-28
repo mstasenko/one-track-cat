@@ -1,0 +1,25 @@
+{
+  "purpose": "Local development fixtures only; not distributed in the voice pack. Any recreated speech must be labelled as AI-generated test audio, not an authentic new statement by the speaker.",
+  "videos": [
+    {
+      "name": "english-accents.webm",
+      "page": "https://commons.wikimedia.org/wiki/File:Can_I_get_some_water_in_my_water_bottle_in_26_different_accents.webm",
+      "url": "https://upload.wikimedia.org/wikipedia/commons/d/d9/Can_I_get_some_water_in_my_water_bottle_in_26_different_accents.webm",
+      "author": "Sarah Valentine Actors Accent Coach",
+      "license": "CC-BY-3.0, as listed on Commons; external-source license review is pending there",
+      "licenseUrl": "https://creativecommons.org/licenses/by/3.0/",
+      "sha256": "538a53724ad7b6fa170cac835f121f0003b8cc36d40ca8f315eca89f143829e7",
+      "limitations": "Short repeated English phrase and deliberately changing accents; useful for a smoke test, not a professional narration quality benchmark."
+    },
+    {
+      "name": "russian-alphabet.webm",
+      "page": "https://commons.wikimedia.org/wiki/File:Russian_alphabet_and_letter_pronunciation.webm",
+      "url": "https://upload.wikimedia.org/wikipedia/commons/b/ba/Russian_alphabet_and_letter_pronunciation.webm",
+      "author": "Нил Пецко",
+      "license": "CC-BY-3.0, license reviewed on Commons",
+      "licenseUrl": "https://creativecommons.org/licenses/by/3.0/",
+      "sha256": "877c5d2e64dad1c3c015c37d641a7a918251fd88a0308a05cc2c8cedcbedebf9",
+      "limitations": "Alphabet lesson, not continuous Russian narration; insufficient by itself for Russian fluency qualification."
+    }
+  ]
+}
