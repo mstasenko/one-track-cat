@@ -17,8 +17,8 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 PATCH_PATH = ROOT / "assets/openvino/reorder-cache.patch"
 PATCH_SHA256 = "2db5e19d91a111fe8d9803db7ad9eddc9a1a2957dc6d75e179ff47d74839e7c1"
-QUALIFICATION_PATH = ROOT / "native/ai-enhance/flash-assets/flash_attention_provenance.json"
-DEFAULT_SOURCE = ROOT / "dist/ai-pack-cache/openvino-source"
+QUALIFICATION_PATH = ROOT / "native/upscale/flash-assets/flash_attention_provenance.json"
+DEFAULT_SOURCE = ROOT / "dist/upscale-pack-cache/openvino-source"
 SOURCE_URL = "https://github.com/openvinotoolkit/openvino.git"
 SOURCE_COMMIT = "7d81aad55a539c827049ac9628ba4f8d5abb4539"
 CI_BUILD_NUMBER = "2026.5.0-23457-7d81aad55a5"
@@ -242,11 +242,11 @@ def _prepare_source(source: Path, build: Path, state: str) -> Path:
 
 
 def _runtime_pin() -> dict[str, str]:
-    expression = "import('./scripts/ai-pack-pins.mjs').then(m => process.stdout.write(JSON.stringify(m.releasePins.runtime)))"
+    expression = "import('./scripts/upscale-pack-pins.mjs').then(m => process.stdout.write(JSON.stringify(m.releasePins.runtime)))"
     try:
         value = json.loads(_output(["node", "--input-type=module", "-e", expression], cwd=ROOT))
     except (BuildError, json.JSONDecodeError) as exc:
-        raise BuildError("could not read scripts/ai-pack-pins.mjs runtime pin") from exc
+        raise BuildError("could not read scripts/upscale-pack-pins.mjs runtime pin") from exc
     required = {"version", "wheelVersion", "artifact", "artifactSha256"}
     if (not isinstance(value, dict) or not required.issubset(value) or
             not isinstance(value["artifactSha256"], str) or

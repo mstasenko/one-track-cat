@@ -5,8 +5,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 
-const { openVinoLauncher } = createRequire(import.meta.url)('../scripts/openvino-launcher.mjs') as {
-  openVinoLauncher: (binary: string) => string
+const { openvinoLauncher } = createRequire(import.meta.url)('../scripts/openvino-launcher.mjs') as {
+  openvinoLauncher: (binary: string) => string
 }
 let directory: string | undefined
 
@@ -17,12 +17,12 @@ afterEach(async () => {
 
 describe('optional OpenVINO worker launchers', () => {
   it.each([
-    ['otc-ai-enhance.bin', '1'], ['otc-face-blur.bin', '1'],
-    ['otc-ai-enhance.bin', undefined], ['otc-face-blur.bin', undefined]
+    ['otc-upscale.bin', '1'], ['otc-face-blur.bin', '1'],
+    ['otc-upscale.bin', undefined], ['otc-face-blur.bin', undefined]
   ] as const)('isolates Intel discovery and preserves %s cache setting %s', async (binary, cacheSetting) => {
     directory = await mkdtemp(join(tmpdir(), 'otc worker '))
     const launcher = join(directory, 'worker')
-    await writeFile(launcher, openVinoLauncher(binary), { mode: 0o755 })
+    await writeFile(launcher, openvinoLauncher(binary), { mode: 0o755 })
     await writeFile(join(directory, binary), '#!/bin/sh\nprintf "%s\\n" "$OCL_ICD_VENDORS" "$CUDA_VISIBLE_DEVICES" "$OPENVINO_LIB_PATH" "$LD_LIBRARY_PATH" "$NEO_CACHE_PERSISTENT" "$@"\n', { mode: 0o755 })
 
     const output = execFileSync(launcher, ['--input', 'a path; not a command'], {
@@ -41,7 +41,7 @@ describe('optional OpenVINO worker launchers', () => {
 
   it('rejects binary names that could escape the pack or change the shell command', () => {
     for (const binary of ['../other.bin', 'worker.bin; false', 'worker\n.bin']) {
-      expect(() => openVinoLauncher(binary)).toThrow('Invalid worker binary name')
+      expect(() => openvinoLauncher(binary)).toThrow('Invalid worker binary name')
     }
   })
 })

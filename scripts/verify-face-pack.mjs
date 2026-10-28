@@ -104,9 +104,19 @@ function verifyArchive(archivePath, manifest) {
   const archiveManifest = zip.readAsText('face-pack/manifest.json')
   if (JSON.stringify(JSON.parse(archiveManifest)) !== JSON.stringify(manifest)) fail('archive manifest differs from the verified pack')
   for (const file of manifest.files) {
+    if (names.includes('face-pack/sources.json') && ['model.xml', 'model.bin'].includes(file.path)) continue
     const entryName = `face-pack/${file.path}`; if (!names.includes(entryName)) fail(`archive is missing ${file.path}`)
     const entry = zip.getEntry(entryName); const data = entry.getData()
     if (data.length !== file.bytes || createHash('sha256').update(data).digest('hex') !== file.sha256) fail(`archive hash or size mismatch for ${file.path}`)
+  }
+  if (names.includes('face-pack/sources.json')) {
+    if (names.includes('face-pack/model.xml') || names.includes('face-pack/model.bin')) fail('runtime archive unexpectedly contains model weights')
+    const sources = JSON.parse(zip.readAsText('face-pack/sources.json'))
+    for (const name of ['model.xml', 'model.bin']) {
+      const source = sources.artifacts?.find((file) => file.path === name)
+      const expected = manifest.files.find((file) => file.path === name)
+      if (!source || source.sha256 !== expected?.sha256 || source.bytes !== expected?.bytes) fail('download model differs from qualified model')
+    }
   }
   return { bytes: statSync(archivePath).size, sha256: digest(archivePath) }
 }

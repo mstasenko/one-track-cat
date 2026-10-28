@@ -1,0 +1,9 @@
+<CustomLayer name="GridSample" type="SimpleGPU" version="1">
+  <Kernel entry="otc_rife_warp"><Source filename="rife_warp.cl"/></Kernel>
+  <Buffers>
+    <Tensor arg-index="0" type="input" port-index="0" format="BFYX"/>
+    <Tensor arg-index="1" type="input" port-index="1" format="BFYX"/>
+    <Tensor arg-index="2" type="output" port-index="0" format="BFYX"/>
+  </Buffers>
+  <WorkSizes global="((B*F*Y*X+127)/128)*128,1,1" local="128,1,1"/>
+</CustomLayer>

@@ -337,7 +337,7 @@ class PrepareFlashPostCpuTests(unittest.TestCase):
             self.assertIn(f"{family}WeightBinding", text)
             self.assertIn("std::array<std::size_t, 5>", text)
             self.assertIn(f"k{family}Layers = 1U", text)
-            self.assertIn(f"std::array<SeedVrAssetPin, 1> k{family}TurboBins", text)
+            self.assertIn(f"std::array<ModelAssetPin, 1> k{family}TurboBins", text)
             self.assertIn(f"std::array<prepare_detail::Plan, 1> k{family}TurboPlans", text)
             self.assertIn(f"std::array<{family}WeightBinding, {count}>", text)
             self.assertIn("lq_proj_in.safetensors", text)

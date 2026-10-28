@@ -1,0 +1,18 @@
+{
+  "format": 1,
+  "modelId": "retinaface-resnet50-fdb6cf66",
+  "artifacts": [
+    {
+      "path": "model.xml",
+      "url": "https://github.com/mstasenko/one-track-cat/releases/download/models-face-v1/model.xml",
+      "bytes": 253560,
+      "sha256": "fdb6cf66b097f9a15edb78cd8fef715416b8fec6126c496e9da392e08fa0e39e"
+    },
+    {
+      "path": "model.bin",
+      "url": "https://github.com/mstasenko/one-track-cat/releases/download/models-face-v1/model.bin",
+      "bytes": 109058552,
+      "sha256": "e3744c5c8579b6e08ce55b872034b132c94c16eef761d48f156248e40fa3d566"
+    }
+  ]
+}

@@ -6,7 +6,7 @@ import {
 } from 'node:fs'
 import { basename, dirname, extname, join, resolve } from 'node:path'
 import AdmZip from 'adm-zip'
-import { openVinoLauncher } from './openvino-launcher.mjs'
+import { openvinoLauncher } from './openvino-launcher.mjs'
 
 const projectRoot = resolve(import.meta.dirname, '..')
 const distRoot = join(projectRoot, 'dist')
@@ -44,15 +44,16 @@ const knownFixtureSpec = {
 function fail(message) { throw new Error(`Face pack build failed: ${message}`) }
 
 function parseArgs(argv) {
-  const options = { archive: join(releaseRoot, 'otc-face-pack.zip'), cache: join(distRoot, 'face-pack-cache'), modelDir: null, output: join(distRoot, 'face-pack'), runtime: process.env.otc_FACE_RUNTIME_DIR ?? null, quiet: false, dryRun: false }
+  const options = { archive: join(releaseRoot, 'otc-face-pack.zip'), cache: join(distRoot, 'face-pack-cache'), modelDir: null, output: join(distRoot, 'face-pack'), runtime: process.env.otc_FACE_RUNTIME_DIR ?? null, quiet: false, dryRun: false, convert: false }
   const keys = { '--archive': 'archive', '--cache': 'cache', '--model-dir': 'modelDir', '--out': 'output', '--runtime': 'runtime' }
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index]
     if (argument === '--help') {
-      process.stdout.write('Usage: node scripts/build-face-pack.mjs [--model-dir DIR] [--runtime DIR] [--cache DIR] [--out DIR] [--archive FILE]\n')
-      process.stdout.write('Build-only conversion uses a local Python 3.11 venv and pinned CPU packages.\n'); process.exit(0)
+      process.stdout.write('Usage: node scripts/build-face-pack.mjs [--model-dir DIR] [--runtime DIR] [--cache DIR] [--out DIR] [--archive FILE] [--convert]\n')
+      process.stdout.write('Uses the pinned, preconverted model. --convert reproduces it with build-only CPU dependencies.\n'); process.exit(0)
     }
     if (argument === '--quiet') options.quiet = true
+    else if (argument === '--convert') options.convert = true
     else if (argument === '--dry-run') options.dryRun = true
     else if (keys[argument]) { if (index + 1 >= argv.length) fail(`missing value for ${argument}`); options[keys[argument]] = resolve(argv[++index]) }
     else fail(`unknown option ${argument}`)
@@ -218,6 +219,11 @@ function runKnownFaceSmoke(smokeBinary, modelXml, outputRoot) {
 async function prepareModel(options, sources) {
   const direct = [options.modelDir, process.env.otc_OMZ_MODEL_DIR].filter(Boolean).map((path) => resolve(path)).find((path) => (existsSync(join(path, 'model.xml')) && existsSync(join(path, 'model.bin'))) || (existsSync(join(path, `${modelSpec.name}.xml`)) && existsSync(join(path, `${modelSpec.name}.bin`))))
   if (direct) return { modelDir: direct, python: null, sources }
+  if (!options.convert) {
+    const catalog = JSON.parse(readFileSync(join(projectRoot, 'assets', 'face', 'sources.json'), 'utf8'))
+    for (const file of catalog.artifacts) await fetchPinned(file.url, join(options.modelDir, file.path), file.sha256, 'sha256', file.bytes)
+    return { modelDir: options.modelDir, python: null, sources }
+  }
   const python = ensureBuildPython(options.cache); installedModelYml(python)
   const omzRoot = join(options.cache, 'omz-models'); const modelOutput = join(omzRoot, 'public', modelSpec.name); cleanGeneratedPath(modelOutput, 'stale OMZ model output'); mkdirSync(omzRoot, { recursive: true })
   const env = { ...process.env, CUDA_VISIBLE_DEVICES: '', otc_CPU_ONLY: '1', OMP_NUM_THREADS: '4', MKL_NUM_THREADS: '4' }
@@ -290,7 +296,7 @@ function sourceManifest() {
 }
 
 function writeLauncher(outputRoot) {
-  const launcher = openVinoLauncher('otc-face-blur.bin')
+  const launcher = openvinoLauncher('otc-face-blur.bin')
   writeFileSync(join(outputRoot, 'otc-face-blur'), launcher, { mode: 0o755 }); chmodSync(join(outputRoot, 'otc-face-blur'), 0o755)
 }
 
@@ -311,12 +317,23 @@ function makeManifest(outputRoot, runtime, modelFiles, libraries, verification) 
 
 async function build(options) {
   if (options.dryRun) { process.stdout.write(`${JSON.stringify({ runtime: runtimeSpec, model: modelSpec, conversion: conversionSpec, output: options.output, archive: options.archive }, null, 2)}\n`); return }
-  const sources = await prepareSources(options); const model = await prepareModel(options, sources); const runtime = await obtainRuntime(options); const modelFiles = verifyModel(model.modelDir); const binaries = runBuild(runtime.root, options.cache)
+  const sources = options.convert ? await prepareSources(options) : {
+    license: await fetchPinned(modelSpec.licenseUrl, join(options.cache, 'sources', 'LICENSE.MIT'), modelSpec.licenseSha256)
+  }
+  const model = await prepareModel(options, sources); const runtime = await obtainRuntime(options); const modelFiles = verifyModel(model.modelDir); const binaries = runBuild(runtime.root, options.cache)
   cleanGeneratedPath(options.output, 'face-pack output'); mkdirSync(options.output, { recursive: true }); copyFileSync(binaries.binary, join(options.output, 'otc-face-blur.bin')); copyFileSync(modelFiles.xml, join(options.output, 'model.xml')); copyFileSync(modelFiles.bin, join(options.output, 'model.bin')); copyFileSync(join(projectRoot, 'LICENSE'), join(options.output, 'LICENSE'))
   await copyLicenses(runtime.root, options.output, sources.license); const libraries = copyRuntimeLibraries(runtime.root, options.output); writeLauncher(options.output)
   const verification = runKnownFaceSmoke(binaries.smoke, join(options.output, 'model.xml'), options.output) ?? { entrypoint: 'otc-face-blur-smoke', device: 'CPU', status: 'fixture-not-supplied' }
   const manifest = makeManifest(options.output, runtime, { xml: join(options.output, 'model.xml'), bin: join(options.output, 'model.bin') }, libraries, verification)
-  const zip = new AdmZip(); zip.addLocalFolder(options.output, 'face-pack'); mkdirSync(dirname(options.archive), { recursive: true }); zip.writeZip(options.archive)
+  const catalogPath = join(projectRoot, 'assets', 'face', 'sources.json')
+  const catalog = JSON.parse(readFileSync(catalogPath, 'utf8'))
+  for (const file of catalog.artifacts) assertPinned(join(options.output, file.path), file.sha256, 'sha256', file.bytes)
+  copyFileSync(catalogPath, join(options.output, 'sources.json'))
+  // Keep the qualified model for CPU verification in the build tree, but not
+  // in the runtime ZIP. The same pinned conversion is downloaded on first use.
+  manifest.files.push({ path: 'sources.json', sha256: digest(catalogPath), bytes: statSync(catalogPath).size })
+  writeFileSync(join(options.output, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`)
+  const zip = new AdmZip(); zip.addLocalFolder(options.output, 'face-pack', (path) => !['model.xml', 'model.bin'].includes(basename(path))); mkdirSync(dirname(options.archive), { recursive: true }); zip.writeZip(options.archive)
   if (!options.quiet) process.stdout.write(`Created ${options.archive} (${statSync(options.archive).size} bytes), ${manifest.files.length} files\n`)
 }
 

@@ -13,7 +13,7 @@ from urllib.parse import urlparse
 
 ROOT = Path(__file__).resolve().parents[1]
 CATALOG = ROOT / "assets/flashvsr-plus/sources.json"
-ASSETS = ROOT / "native/ai-enhance/flash-assets"
+ASSETS = ROOT / "native/upscale/flash-assets"
 POST_PATH = ROOT / "scripts/prepare-flash-post.py"
 DECODER_PATH = ROOT / "scripts/prepare-flash-decoder.py"
 

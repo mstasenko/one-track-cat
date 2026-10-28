@@ -51,11 +51,11 @@ jobs:
           sudo systemd-run --wait --pipe --collect \
             --uid="$(id -u)" --gid="$(id -g)" --working-directory="$PWD" \
             --property=MemoryMax=6G --property=MemorySwapMax=0 \
-            --setenv=PATH="$PATH" npm run build:ai-pack
-          otc_CPU_ONLY=1 npm run verify:ai-pack
+            --setenv=PATH="$PATH" npm run build:upscale-pack
+          otc_CPU_ONLY=1 npm run verify:upscale-pack
           # No learned checkpoints or whole-4K CPU restoration in small-pack CI.
           # Full Electron/FFmpeg spatial/audio/metadata coverage is qualified separately.
-          otc_CPU_ONLY=1 node scripts/smoke-ai-pack.mjs
+          otc_CPU_ONLY=1 node scripts/smoke-upscale-pack.mjs
           cd release
           sha256sum ./*.AppImage ./*.zip > SHA256SUMS
 

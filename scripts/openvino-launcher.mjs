@@ -1,5 +1,5 @@
 /** One environment for both optional workers; only their binary names differ. */
-export function openVinoLauncher(binary) {
+export function openvinoLauncher(binary) {
   if (!/^[a-z0-9-]+\.bin$/.test(binary)) throw new Error('Invalid worker binary name')
   return [
     '#!/bin/sh', 'set -eu',

@@ -285,7 +285,7 @@ class DecoderPreparationContractTests(unittest.TestCase):
         )
         self.assertIn("kFlashDecoderGrowChildSpans[2] = {", rendered)
         self.assertIn("kFlashDecoderFrameChildSpans[2] = {", rendered)
-        self.assertNotIn("std::array<SeedVrWeightSpan, 2>", rendered)
+        self.assertNotIn("std::array<ModelWeightSpan, 2>", rendered)
         self.assertNotIn("{{{{", rendered)
 
     def test_checkpoint_constants_are_not_changed_by_test_inputs(self):

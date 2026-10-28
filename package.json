@@ -36,8 +36,8 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "test": "node scripts/run-tests.mjs --total npm run test:suites",
-    "test:suites": "npm run lint && npm run typecheck && npm run test:vitest && npm run test:ai-recipes && node scripts/build-meme-pack.mjs --quiet && node scripts/verify-meme-pack.mjs && npm run test:e2e",
-    "test:ai-recipes": "node scripts/run-tests.mjs python3 scripts/test_prepare_ai_pack.py && node scripts/run-tests.mjs python3 scripts/test_build_openvino_gpu.py",
+    "test:suites": "npm run lint && npm run typecheck && npm run test:vitest && npm run test:upscale-recipes && node scripts/build-meme-pack.mjs --quiet && node scripts/verify-meme-pack.mjs && npm run test:e2e",
+    "test:upscale-recipes": "node scripts/run-tests.mjs python3 scripts/test_prepare_upscale_pack.py && node scripts/run-tests.mjs python3 scripts/test_build_openvino_gpu.py",
     "verify:ci": "npm install && npm audit --audit-level=low && npm test",
     "test:vitest": "node scripts/run-tests.mjs vitest run --coverage && node scripts/run-tests.mjs node scripts/quality.mjs",
     "test:e2e": "electron-vite build --logLevel error && node scripts/run-tests.mjs node scripts/run-headless-wayland.mjs node_modules/.bin/playwright test",
@@ -49,8 +49,8 @@
     "build:face-pack": "node scripts/build-face-pack.mjs",
     "verify:face-pack": "node scripts/verify-face-pack.mjs",
     "build:voice-pack": "node scripts/build-voice-pack.mjs",
-    "build:ai-pack": "node scripts/build-ai-pack.mjs",
-    "verify:ai-pack": "node scripts/verify-ai-pack.mjs"
+    "build:upscale-pack": "node scripts/build-upscale-pack.mjs",
+    "verify:upscale-pack": "node scripts/verify-upscale-pack.mjs"
   },
   "dependencies": {
     "@fontsource/anton": "5.2.7",

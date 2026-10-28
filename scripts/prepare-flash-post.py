@@ -26,7 +26,7 @@ from typing import Any
 from flash_export import fresh_output
 
 ROOT = Path(__file__).resolve().parents[1]
-ASSET_ROOT = ROOT / "native" / "ai-enhance" / "flash-assets"
+ASSET_ROOT = ROOT / "native" / "upscale" / "flash-assets"
 LAYERS = 30
 ROWS = 4096
 DIM = 1536
@@ -536,28 +536,28 @@ def _render_stage_header(mode_records: dict[str, dict[str, Any]],
         "#include <array>",
         "#include <cstddef>",
         "#include <cstdint>",
-        '#include "seedvr_prepare_detail.hpp"',
+        '#include "model_prepare_detail.hpp"',
         "",
-        "namespace otc::ai {",
+        "namespace otc::upscale {",
         f"struct {family}WeightBinding {{",
         "  const char* canonical_key;",
         "  const char* port_name;",
-        "  SeedVrWeightSpan span;",
+        "  ModelWeightSpan span;",
         f"  std::array<std::size_t, {dimension_width}> dimensions;",
         "  std::size_t rank;",
         "};",
-        f"inline const SeedVrAssetPin k{family}Xml = "
+        f"inline const ModelAssetPin k{family}Xml = "
         + _cpp_pin(asset_pins["xml"][0], asset_pins["xml"][1], asset_pins["xml"][2]) + ";",
-        f"inline const SeedVrAssetPin k{family}StructuralBin = "
+        f"inline const ModelAssetPin k{family}StructuralBin = "
         + _cpp_pin(asset_pins["bin"][0], asset_pins["bin"][1], asset_pins["bin"][2]) + ";",
     ]
     if stage == "POST":
         lines.extend([
-            f"inline const SeedVrAssetPin k{family}Config = "
+            f"inline const ModelAssetPin k{family}Config = "
             + _cpp_pin(asset_pins["config"][0], asset_pins["config"][1], asset_pins["config"][2]) + ";",
-            f"inline const SeedVrAssetPin k{family}BridgeSource = "
+            f"inline const ModelAssetPin k{family}BridgeSource = "
             + _cpp_pin(asset_pins["bridge"][0], asset_pins["bridge"][1], asset_pins["bridge"][2]) + ";",
-            f"inline const SeedVrAssetPin k{family}SparseSource = "
+            f"inline const ModelAssetPin k{family}SparseSource = "
             + _cpp_pin(asset_pins["sparse"][0], asset_pins["sparse"][1], asset_pins["sparse"][2]) + ";",
         ])
     lines.extend([
@@ -585,7 +585,7 @@ def _render_stage_header(mode_records: dict[str, dict[str, Any]],
         # CROSS consumes learned spans from DIT (source 0), but LQ remains an
         # authenticated source because prepare_detail::prepare validates the
         # complete DIT+LQ pair before binding any plan.
-        lines.append(f"inline const SeedVrAssetPin {source_name}[2] = {{")
+        lines.append(f"inline const ModelAssetPin {source_name}[2] = {{")
         lines.append("  " + _cpp_pin(dit["name"], dit["bytes"], dit["sha256"]) + ",")
         lq = source_records["lq"]
         lines.append("  " + _cpp_pin(lq["name"], lq["bytes"], lq["sha256"]))
@@ -596,7 +596,7 @@ def _render_stage_header(mode_records: dict[str, dict[str, Any]],
             lines.append(f"inline const prepare_detail::Segment {selected_segments}_{index:02d}[] = {{")
             lines.extend("  " + _segment_cpp(segment) + "," for segment in plan["segments"])
             lines.append("};")
-        lines.append(f"inline const std::array<SeedVrAssetPin, {plan_count}> {selected_bins}{{{{")
+        lines.append(f"inline const std::array<ModelAssetPin, {plan_count}> {selected_bins}{{{{")
         lines.extend(
             "  " + _cpp_pin(record["name"], record["bytes"], record["sha256"]) + ","
             for record in (plan["bin"] for plan in plans)
@@ -652,13 +652,13 @@ def _render_lq_header(
         "#include <array>",
         "#include <cstddef>",
         "#include <cstdint>",
-        '#include "seedvr_prepare_detail.hpp"',
+        '#include "model_prepare_detail.hpp"',
         "",
-        "namespace otc::ai {",
+        "namespace otc::upscale {",
         "struct FlashLqWeightBinding {",
         "  const char* canonical_key;",
         "  const char* port_name;",
-        "  SeedVrWeightSpan span;",
+        "  ModelWeightSpan span;",
         "  std::array<std::size_t, 5> dimensions;",
         "  std::size_t rank;",
         "};",
@@ -674,9 +674,9 @@ def _render_lq_header(
         if set(asset) != {"xml", "bin"}:
             raise ValueError(f"LQ {role} structural pins must contain XML and BIN")
         lines.extend([
-            f"inline const SeedVrAssetPin kFlashLq{role_cap}Xml = "
+            f"inline const ModelAssetPin kFlashLq{role_cap}Xml = "
             + _cpp_pin(asset["xml"]["name"], asset["xml"]["bytes"], asset["xml"]["sha256"]) + ";",
-            f"inline const SeedVrAssetPin kFlashLq{role_cap}StructuralBin = "
+            f"inline const ModelAssetPin kFlashLq{role_cap}StructuralBin = "
             + _cpp_pin(asset["bin"]["name"], asset["bin"]["bytes"], asset["bin"]["sha256"]) + ";",
         ])
         schema = LQ_ROLE_SCHEMAS[role]
@@ -711,7 +711,7 @@ def _render_lq_header(
         dit = source_records["dit"]
         lq = source_records["lq"]
         lines.extend([
-            f"inline const SeedVrAssetPin kFlashLq{mode_cap}Sources[2] = {{",
+            f"inline const ModelAssetPin kFlashLq{mode_cap}Sources[2] = {{",
             "  " + _cpp_pin(dit["name"], dit["bytes"], dit["sha256"]) + ",",
             "  " + _cpp_pin(lq["name"], lq["bytes"], lq["sha256"]),
             "};",
@@ -728,7 +728,7 @@ def _render_lq_header(
             lines.extend("  " + _segment_cpp(segment) + "," for segment in plan["segments"])
             lines.extend(["};", ""])
         lines.append(
-            f"inline const std::array<SeedVrAssetPin, 3> kFlashLq{mode_cap}Bins{{{{"
+            f"inline const std::array<ModelAssetPin, 3> kFlashLq{mode_cap}Bins{{{{"
         )
         lines.extend(
             "  " + _cpp_pin(plans[role]["bin"]["name"], plans[role]["bin"]["bytes"],
