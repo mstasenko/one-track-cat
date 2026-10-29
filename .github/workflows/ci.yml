@@ -31,7 +31,7 @@ jobs:
       - name: Install GNOME Wayland test runtime
         run: |
           sudo apt-get update
-          sudo apt-get install --yes gnome-shell libgbm1 libgtk-3-0 libnss3 libasound2t64
+          sudo apt-get install --yes gnome-shell pulseaudio libgbm1 libgtk-3-0 libnss3 libasound2t64
 
       - name: Install dependencies
         run: npm install --global npm@11.18.0
@@ -46,16 +46,7 @@ jobs:
         run: |
           appimage="release/OneTrackCat-$(node -p 'require("./package.json").version')-ubuntu26-wayland-x86_64.AppImage"
           test -f "$appimage"
-          set +e
-          node scripts/run-headless-wayland.mjs \
-            timeout 10s env APPIMAGE_EXTRACT_AND_RUN=1 "$appimage" \
-            >"$RUNNER_TEMP/appimage-smoke.log" 2>&1
-          status=$?
-          set -e
-          if ! test "$status" -eq 0 -o "$status" -eq 124; then
-            cat "$RUNNER_TEMP/appimage-smoke.log"
-            exit 1
-          fi
+          node scripts/run-headless-wayland.mjs node scripts/smoke-appimage.mjs
 
       - name: Upload reports and AppImage
         if: always()

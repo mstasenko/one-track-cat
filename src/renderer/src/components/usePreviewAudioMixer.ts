@@ -149,10 +149,10 @@ export function usePreviewAudioMixer(): PreviewAudioMixer {
     }
   }, [ensureContext, ensureStartupWorklet])
 
-  const setGain = useCallback((media: HTMLMediaElement, gain: number, delay = 0, duration = 0.02): void => {
+  const setGain = useCallback((media: HTMLMediaElement, gain: number, delay?: number, duration?: number): void => {
     const safeGain = Number.isFinite(gain) ? Math.max(0, Math.min(2, gain)) : 1
-    const safeDelay = Number.isFinite(delay) ? Math.max(0, delay) : 0
-    const safeDuration = Number.isFinite(duration) ? Math.max(0.001, duration) : 0.02
+    const safeDelay = Number.isFinite(delay) ? Math.max(0, delay ?? 0) : 0
+    const safeDuration = Number.isFinite(duration) ? Math.max(0.001, duration ?? 0.02) : 0.02
     const route = routesRef.current.get(media)
     const context = contextRef.current
     if (!route || !context) {
@@ -165,21 +165,26 @@ export function usePreviewAudioMixer(): PreviewAudioMixer {
     // Handoff/path-change effects can ask to mute an already fading decoder.
     // Extending that fade lets its source end/seek while still audible.
     if (route.targetGain === safeGain && route.rampEnd !== undefined && route.rampEnd <= end) return
+    // A steady-gain handoff needs a few render blocks for automation to arrive.
+    // Reserve that lead inside the existing fade; active ramps and explicit cut
+    // deadlines keep their timing, so a draining decoder is not retained longer.
+    const holdTime = now + (delay === undefined && duration === undefined &&
+      (route.rampEnd === undefined || route.rampEnd <= now) ? 0.01 : 0)
     // AudioParam.value may lag an active automation curve by a render quantum.
     // Every route ramp is created here, so evaluate its exact held value instead.
-    const current = routedGainAt(route, now, parameter.value)
+    const current = routedGainAt(route, holdTime, parameter.value)
     if (typeof parameter.cancelAndHoldAtTime === 'function') {
-      parameter.cancelAndHoldAtTime(now)
+      parameter.cancelAndHoldAtTime(holdTime)
     } else {
-      parameter.cancelScheduledValues(now)
+      parameter.cancelScheduledValues(holdTime)
     }
     // Cancellation inserts no anchor once previous automation has finished.
     // Always start at the current value, or a new ramp can jump toward its target.
-    parameter.setValueAtTime(current, now)
-    if (safeDelay > 0) parameter.setValueAtTime(current, now + safeDelay)
+    parameter.setValueAtTime(current, holdTime)
+    if (safeDelay > 0) parameter.setValueAtTime(current, holdTime + safeDelay)
     parameter.linearRampToValueAtTime(safeGain, end)
     route.targetGain = safeGain
-    route.rampStart = now + safeDelay
+    route.rampStart = holdTime + safeDelay
     route.rampStartGain = current
     route.rampEnd = end
   }, [])

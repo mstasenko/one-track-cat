@@ -79,11 +79,17 @@ without duplicating their large weights. It fails if those prerequisites are
 absent. This development install is not the portable release pack.
 Run `npm run build` afterwards, then launch the normal desktop development icon.
 
-`npm run build:voice-pack` packages the qualified torch-free environment into
+After preparation, `npm run build:voice-pack` packages the qualified torch-free environment into
 `release/otc-voice-pack.zip`, without models or development recordings. It builds
 in a fresh `dist/voice-pack-release` directory and refuses occupied output paths.
 The portable runtime is isolated from host Python packages and verified after
 relocation. Use the same supported Linux baseline as OneTrackCat.
+
+To reproduce the ZIP from a fresh checkout with Python 3.14.6, run
+`python scripts/prepare-voice-pack.py`, then
+`npm run build:voice-pack`.
+This installs pinned runtime wheels and adapter/licenses only, without model
+weights or conversion tools. The builder also smoke-tests the extracted ZIP.
 
 `sources.json` pins revisions, file sizes and SHA-256 checksums. Recognize
 downloads models into the private app-data `otc-voice-models` folder before

@@ -116,7 +116,7 @@ Later use works offline, without downloading or converting models again.
 The media pack adds ready-to-use reaction images, clips, and sounds. The face pack adds the
 **Blur faces** effect. The Upscale pack adds optional video enhancement. The voice pack adds
 **Re-voice**. Download the packs you want
-from Releases and extract them beside the AppImage.
+from the same release as your app and extract them beside the AppImage.
 
 ```text
 one-track-cat/
@@ -128,7 +128,7 @@ one-track-cat/
 ```
 
 You can use OneTrackCat without any packs and add your own media with **New**. The packs are
-optional downloads; their included files and licenses are listed in their manifests.
+optional downloads; license notices are included inside each pack.
 Runtime packs keep large model weights separate from their ZIP files, and the app downloads
 the weights it needs on first use.
 Face blur downloads about 109 MB on first use. Existing face packs with bundled

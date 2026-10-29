@@ -118,7 +118,7 @@ describe('preview audio mixer', () => {
 
     expect(gain.value).toBe(0)
     act(() => { mixer.setGain(video, 1) })
-    expect(gain.setValueAtTime).toHaveBeenLastCalledWith(0, 0)
+    expect(gain.setValueAtTime).toHaveBeenLastCalledWith(0, 0.01)
     expect(gain.linearRampToValueAtTime).toHaveBeenLastCalledWith(1, 0.02)
     act(() => { root.unmount() })
   })
@@ -217,23 +217,25 @@ describe('preview audio mixer', () => {
 
     gain.value = 1
     act(() => { mixer.setGain(video, 0) })
-    expect(gain.cancelAndHoldAtTime).toHaveBeenLastCalledWith(0)
-    expect(gain.setValueAtTime).toHaveBeenLastCalledWith(gain.value, 0)
+    expect(gain.cancelAndHoldAtTime).toHaveBeenLastCalledWith(0.01)
+    expect(gain.setValueAtTime).toHaveBeenLastCalledWith(gain.value, 0.01)
     expect(gain.linearRampToValueAtTime).toHaveBeenLastCalledWith(0, 0.02)
 
-    context.currentTime = 0.005
-    // The getter still exposes the prior value; the active ramp is at 0.75.
+    context.currentTime = 0.015
+    // The getter still exposes the prior value; the active ramp is at 0.5.
     act(() => { mixer.setGain(video, 1) })
-    expect(gain.cancelAndHoldAtTime).toHaveBeenLastCalledWith(0.005)
-    expect(gain.setValueAtTime).toHaveBeenLastCalledWith(0.75, 0.005)
-    expect(gain.linearRampToValueAtTime).toHaveBeenLastCalledWith(1, 0.025)
+    expect(gain.cancelAndHoldAtTime).toHaveBeenLastCalledWith(0.015)
+    const activeReversal = gain.setValueAtTime.mock.calls.at(-1)
+    expect(activeReversal?.[0]).toBeCloseTo(0.5, 10)
+    expect(activeReversal?.[1]).toBeCloseTo(0.015, 10)
+    expect(gain.linearRampToValueAtTime).toHaveBeenLastCalledWith(1, 0.035)
     expect(gain.cancelScheduledValues).not.toHaveBeenCalled()
 
     context.currentTime = 2
     // The previous ramp has completed at 1 even if the getter is stale.
     gain.value = 0
     act(() => { mixer.setGain(video, 0) })
-    expect(gain.setValueAtTime).toHaveBeenLastCalledWith(1, 2)
+    expect(gain.setValueAtTime).toHaveBeenLastCalledWith(1, 2.01)
     expect(gain.linearRampToValueAtTime).toHaveBeenLastCalledWith(0, 2.02)
     act(() => { root.unmount() })
   })
@@ -254,14 +256,43 @@ describe('preview audio mixer', () => {
     context.currentTime = 1
     gain.value = 1
     act(() => { mixer.setGain(video, 0) })
-    context.currentTime = 1.01
+    context.currentTime = 1.015
     // The getter remains at 1 while the scheduled ramp has reached 0.5.
-    act(() => { mixer.setGain(video, 1, 0.09, 0.01) })
+    act(() => { mixer.setGain(video, 1, 0.085, 0.01) })
 
-    expect(gain.cancelAndHoldAtTime).toHaveBeenLastCalledWith(1.01)
-    expect(gain.setValueAtTime).toHaveBeenCalledWith(0.5, 1.01)
-    expect(gain.setValueAtTime).toHaveBeenLastCalledWith(0.5, 1.1)
-    expect(gain.linearRampToValueAtTime).toHaveBeenLastCalledWith(1, 1.11)
+    expect(gain.cancelAndHoldAtTime).toHaveBeenLastCalledWith(1.015)
+    const delayedReversalCalls = gain.setValueAtTime.mock.calls
+    expect(delayedReversalCalls.at(-2)?.[0]).toBeCloseTo(0.5, 10)
+    expect(delayedReversalCalls.at(-2)?.[1]).toBeCloseTo(1.015, 10)
+    expect(delayedReversalCalls.at(-1)?.[0]).toBeCloseTo(0.5, 10)
+    expect(delayedReversalCalls.at(-1)?.[1]).toBeCloseTo(1.1, 10)
+    const delayedRamp = gain.linearRampToValueAtTime.mock.calls.at(-1)
+    expect(delayedRamp?.[0]).toBe(1)
+    expect(delayedRamp?.[1]).toBeCloseTo(1.11, 10)
+    act(() => { root.unmount() })
+  })
+
+  it('cancels a pending future fade when the handoff reverses while still flat', () => {
+    const container = document.createElement('div')
+    const root = createRoot(container)
+    let ready: Parameters<NonNullable<Parameters<typeof MixerHarness>[0]['onReady']>> | undefined
+    act(() => {
+      root.render(<MixerHarness onReady={(...values) => { ready = values }} />)
+    })
+    if (!ready) throw new Error('mixer was not ready')
+    const [mixer, video] = ready
+    const context = MockAudioContext.instances[0]
+    const gain = context?.gainNodes[0]?.gain
+    if (!context || !gain) throw new Error('gain was not created')
+
+    gain.value = 1
+    act(() => { mixer.setGain(video, 0) })
+    context.currentTime = 0.005
+    act(() => { mixer.setGain(video, 1) })
+
+    expect(gain.cancelAndHoldAtTime).toHaveBeenLastCalledWith(0.005)
+    expect(gain.setValueAtTime).toHaveBeenLastCalledWith(1, 0.005)
+    expect(gain.linearRampToValueAtTime).toHaveBeenLastCalledWith(1, 0.025)
     act(() => { root.unmount() })
   })
 

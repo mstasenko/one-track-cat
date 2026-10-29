@@ -26,6 +26,9 @@ Keep it until the packager updates its downloader; verify proxy setup and
 `npm audit` when changing it. Exact pins and the seven-day release delay remain enabled.
 Package lockfiles are disabled and ignored. Keep direct dependency versions exact and run
 `npm audit` after installation: indirect dependencies can change between installs.
+Use `npm update` for subsequent dependency refreshes (also used by `verify:ci`).
+Without a lockfile, npm 11's incremental `install` loses the resolved registry metadata
+needed for exact install-script approvals; `update` resolves it again without weakening those approvals.
 
 Test commands group short result names by suite, with colored status marks and no live redraws.
 Vitest, Playwright, Python and maintainability checks use the same indented status rows
@@ -55,8 +58,8 @@ suite through the headless Wayland launcher. `npm test` runs linting, TypeScript
 quality checks, media-pack build and verification, and the Wayland Electron tests.
 
 Ordinary tests use tiny generated media and need no AI packs, downloaded models, private
-projects, or GPU. HEVC seek checks run by default. After building both AI packs, run
-`npm run test:packs` for the seven CPU integration checks: cached face styles and Replay,
+projects, or GPU. HEVC seek checks run by default. After building both native AI packs, run
+`npm run test:packs` for native RIFE stream checks and seven CPU integration checks: cached face styles and Replay,
 known-face export/cache reuse, and tiny RIFE export with audio and metadata checks.
 These are mandatory in release CI and fail if their pack prerequisites are missing;
 there are no opt-in skip flags. The face export fixture is the pinned public NASA image
@@ -64,8 +67,10 @@ prepared by face-pack verification. Full-resolution GPU performance experiments 
 part of the automated test suite.
 
 The preview audio checks use PulseAudio or PipeWire. The headless launcher preserves an available
-desktop audio connection; set `PULSE_SERVER` explicitly for another server. These checks record
-only the editor's mix and output silence. They are skipped when no audio server is available;
+desktop audio connection; set `PULSE_SERVER` explicitly for another server. Without one,
+it starts a private silent PulseAudio sink when PulseAudio is installed and stops it after
+the command. CI installs PulseAudio so the PCM checks run there. These checks record only
+the editor's mix and output silence. Hosts without either server skip the PCM checks;
 the unit tests and FFmpeg audio-boundary tests still run.
 
 Focused tests can be run with Vitest, for example:

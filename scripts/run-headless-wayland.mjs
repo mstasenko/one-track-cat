@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -31,6 +31,21 @@ function compositorCommand(socket) {
   throw new Error('Hidden GUI commands require GNOME Shell or Weston')
 }
 
+function privatePulseAudioCommand(socket) {
+  return {
+    command: 'pulseaudio',
+    args: [
+      '--daemonize=no', '--exit-idle-time=-1', '--log-target=stderr', '--fail=yes', '-n',
+      '-L', 'module-null-sink rate=48000 channels=2 norewinds=1 sink_name=otc-headless',
+      '-L', `module-native-protocol-unix socket=${socket} auth-anonymous=1`
+    ]
+  }
+}
+
+function isSocket(path) {
+  try { return statSync(path).isSocket() } catch { return false }
+}
+
 function runCommand(command, args, environment) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, { detached: true, env: environment, stdio: 'inherit' })
@@ -47,23 +62,60 @@ function runCommand(command, args, environment) {
   })
 }
 
-async function waitForSocket(path, compositor, readLog) {
+async function waitForSocket(path, child, readLog, label = 'Headless compositor', failed = () => false, ready = existsSync) {
   for (let attempt = 0; attempt < 150; attempt += 1) {
-    if (existsSync(path)) return
-    if (compositor.exitCode !== null) throw new Error(`Headless compositor exited early\n${readLog()}`)
+    if (failed() || child.exitCode !== null) throw new Error(`${label} exited early\n${readLog()}`)
+    if (ready(path)) return
     await delay(100)
   }
-  throw new Error(`Headless compositor did not create ${path}\n${readLog()}`)
+  throw new Error(`${label} did not create ${path}\n${readLog()}`)
+}
+
+function launchPrivatePulseAudio(socket, environment) {
+  const spec = privatePulseAudioCommand(socket)
+  const pulseEnvironment = { ...environment }
+  delete pulseEnvironment.PULSE_SERVER
+  const child = spawn(spec.command, spec.args, {
+    env: pulseEnvironment,
+    stdio: ['ignore', 'pipe', 'pipe']
+  })
+  let log = ''
+  let startupError
+  const capture = (chunk) => { log = `${log}${chunk}`.slice(-16_000) }
+  const readLog = () => `${log}${startupError ? `\n${startupError.message}` : ''}`
+  child.stdout.on('data', capture)
+  child.stderr.on('data', capture)
+  child.once('error', (error) => { startupError = error })
+  return { child, readLog, failed: () => startupError !== undefined }
+}
+
+async function stopPrivatePulseAudio(server) {
+  const child = server?.child
+  if (child) {
+    if (child.exitCode === null) {
+      try { child.kill('SIGTERM') } catch { /* already stopped */ }
+      await Promise.race([new Promise((resolve) => child.once('exit', resolve)), delay(2_000)])
+      if (child.exitCode === null) {
+        try { child.kill('SIGKILL') } catch { /* already stopped */ }
+      }
+    }
+    child.stdout?.destroy()
+    child.stderr?.destroy()
+  }
 }
 
 async function stopCompositor(compositor, runtimeDirectory) {
-  if (compositor.exitCode === null && compositor.pid) {
+  if (compositor && compositor.exitCode === null && compositor.pid) {
     try { process.kill(-compositor.pid, 'SIGTERM') } catch { /* already stopped */ }
     await Promise.race([new Promise((resolve) => compositor.once('exit', resolve)), delay(2_000)])
     if (compositor.exitCode === null) {
       try { process.kill(-compositor.pid, 'SIGKILL') } catch { /* already stopped */ }
     }
   }
+  // Give detached compositor helpers time to leave the private runtime tree.
+  await delay(250)
+  compositor?.stdout?.destroy()
+  compositor?.stderr?.destroy()
   // GNOME and Electron may leave private portal/GVFS FUSE mounts behind.
   for (const mount of ['doc', 'gvfs']) {
     spawnSync('fusermount3', ['-uz', join(runtimeDirectory, mount)], { stdio: 'ignore' })
@@ -95,30 +147,40 @@ async function main() {
     NO_AT_BRIDGE: '1',
     PLAYWRIGHT_FORCE_TTY: process.env.PLAYWRIGHT_FORCE_TTY ?? '0'
   }
-  // Moving XDG_RUNTIME_DIR also hides the desktop audio socket. Keep a real
-  // audio clock for PCM tests instead of Chromium's discontinuous dummy sink.
-  const pulseSocket = process.env.XDG_RUNTIME_DIR && join(process.env.XDG_RUNTIME_DIR, 'pulse', 'native')
-  if (!environment.PULSE_SERVER && pulseSocket && existsSync(pulseSocket)) {
-    environment.PULSE_SERVER = `unix:${pulseSocket}`
-  }
-  // Prevent Electron from falling back to the user's visible X11 desktop.
-  delete environment.DISPLAY
-
-  const compositorSpec = compositorCommand(socket)
-  const compositor = spawn(compositorSpec.command, compositorSpec.args, {
-    detached: true,
-    env: environment,
-    stdio: ['ignore', 'pipe', 'pipe']
-  })
-  let log = ''
-  const capture = (chunk) => { log = `${log}${chunk}`.slice(-16_000) }
-  compositor.stdout.on('data', capture)
-  compositor.stderr.on('data', capture)
-
+  let compositor
+  let pulseAudio
   try {
+    const compositorSpec = compositorCommand(socket)
+    // Prevent Electron and the private audio server from falling back to the
+    // user's visible X11 desktop.
+    delete environment.DISPLAY
+    const hostPulseSocket = process.env.XDG_RUNTIME_DIR && join(process.env.XDG_RUNTIME_DIR, 'pulse', 'native')
+    if (!environment.PULSE_SERVER && hostPulseSocket && isSocket(hostPulseSocket)) {
+      // Keep using the user's desktop server without changing or stopping it.
+      environment.PULSE_SERVER = `unix:${hostPulseSocket}`
+    } else if (!environment.PULSE_SERVER && available('pulseaudio')) {
+      const privatePulseSocket = join(runtimeDirectory, 'pulse-native')
+      pulseAudio = launchPrivatePulseAudio(privatePulseSocket, environment)
+      await waitForSocket(privatePulseSocket, pulseAudio.child, pulseAudio.readLog, 'PulseAudio', pulseAudio.failed, isSocket)
+      if (pulseAudio.failed() || pulseAudio.child.exitCode !== null) {
+        throw new Error(`PulseAudio exited early\n${pulseAudio.readLog()}`)
+      }
+      environment.PULSE_SERVER = `unix:${privatePulseSocket}`
+    }
+
+    compositor = spawn(compositorSpec.command, compositorSpec.args, {
+      detached: true,
+      env: environment,
+      stdio: ['ignore', 'pipe', 'pipe']
+    })
+    let log = ''
+    const capture = (chunk) => { log = `${log}${chunk}`.slice(-16_000) }
+    compositor.stdout.on('data', capture)
+    compositor.stderr.on('data', capture)
     await waitForSocket(join(runtimeDirectory, socket), compositor, () => log)
     return await runCommand(command, args, environment)
   } finally {
+    await stopPrivatePulseAudio(pulseAudio)
     await stopCompositor(compositor, runtimeDirectory)
   }
 }

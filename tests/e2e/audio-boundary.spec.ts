@@ -243,7 +243,7 @@ function installAudioCapture({ startupDelayMs, workletUrl, mediaClockLagMs = 0, 
         gain.gain[name] = (value, time) => {
           const media = mediaRoutes.get(id)
           capture.events.push({ kind: name, gain: id, value, time, contextTime: this.currentTime,
-            media: media?.className ?? '', sourceTime: media?.currentTime ?? -1,
+            wallTime: performance.now(), media: media?.className ?? '', sourceTime: media?.currentTime ?? -1,
             source: media?.getAttribute('src') ?? '', paused: media?.paused ?? true })
           return schedule(value, time)
         }
@@ -253,6 +253,12 @@ function installAudioCapture({ startupDelayMs, workletUrl, mediaClockLagMs = 0, 
     const createSource = this.createMediaElementSource.bind(this)
     this.createMediaElementSource = (media) => {
       const source = createSource(media)
+      const disconnect = source.disconnect.bind(source)
+      source.disconnect = (...args: unknown[]): void => {
+        capture.events.push({ kind: 'source-disconnect', media: media.className,
+          source: media.getAttribute('src') ?? '', contextTime: this.currentTime, wallTime: performance.now() })
+        Reflect.apply(disconnect, source, args)
+      }
       mediaNodes.set(source, media)
       const connect = source.connect.bind(source)
       source.connect = ((destination: AudioNode) => {
