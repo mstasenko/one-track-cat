@@ -5,10 +5,15 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import io
+import ctypes
+import json
+import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import tempfile
+import textwrap
 import unittest
 from contextlib import redirect_stderr
 from unittest import mock
@@ -172,6 +177,7 @@ class OpenVinoGpuRecipeTests(unittest.TestCase):
     def test_cmake_options_are_gpu_only_and_pinned(self):
         options = dict(recipe.GPU_CMAKE_OPTIONS)
         self.assertEqual(options["ENABLE_INTEL_GPU"], "ON")
+        self.assertEqual(options["ENABLE_FASTER_BUILD"], "ON")
         self.assertEqual(options["GPU_RT_TYPE"], "OCL")
         for name in ("ENABLE_INTEL_CPU", "ENABLE_INTEL_NPU", "ENABLE_PROXY", "ENABLE_TESTS",
                      "ENABLE_PYTHON", "ENABLE_JS", "ENABLE_AUTO", "ENABLE_HETERO",
@@ -184,6 +190,82 @@ class OpenVinoGpuRecipeTests(unittest.TestCase):
         self.assertEqual(options["ENABLE_TBBBIND_2_5"], "OFF")
         self.assertEqual(recipe.PLUGIN_RELATIVE_PATH,
                          Path("bin/intel64/Release") / recipe.PLUGIN_NAME)
+
+    def test_runtime_pin_includes_payload_pinned_sdk_core(self):
+        runtime = recipe._runtime_pin()
+        payload_pins = json.loads(subprocess.check_output(
+            ["node", "--input-type=module", "-e",
+             "import {payloadPins} from './scripts/upscale-pack-pins.mjs'; "
+             "console.log(JSON.stringify(payloadPins))"],
+            cwd=recipe.ROOT, text=True))
+        self.assertEqual(runtime["sdkCore"], payload_pins[recipe.SDK_CORE_MEMBER])
+
+    def test_sdk_core_mismatch_rejects_before_cmake(self):
+        with tempfile.TemporaryDirectory(prefix="openvino-sdk-core-mismatch-") as directory:
+            sdk = Path(directory) / "sdk"
+            core = sdk / "openvino/libs" / recipe.SDK_CORE_NAME
+            core.parent.mkdir(parents=True)
+            core.write_bytes(b"tampered SDK core")
+            expected = b"expected SDK core"
+            runtime = {"sdkCore": {
+                "bytes": len(expected), "sha256": hashlib.sha256(expected).hexdigest()}}
+            with mock.patch.object(recipe, "_prepare_source") as prepare, \
+                    mock.patch.object(recipe, "_cmake_flags") as cmake_flags, \
+                    mock.patch.object(recipe, "_run") as run:
+                with self.assertRaisesRegex(recipe.BuildError, "SDK OpenVINO core"):
+                    recipe._build(Path(directory) / "source", Path(directory) / "build",
+                                  Path(directory) / "out.so", sdk, "pristine", {}, 1, runtime)
+            prepare.assert_not_called()
+            cmake_flags.assert_not_called()
+            run.assert_not_called()
+
+    def test_sdk_core_receipt_records_actual_consumed_bytes(self):
+        with tempfile.TemporaryDirectory(prefix="openvino-sdk-core-receipt-") as directory:
+            root = Path(directory)
+            sdk = root / "sdk"
+            (sdk / "openvino/cmake").mkdir(parents=True)
+            core = sdk / "openvino/libs" / recipe.SDK_CORE_NAME
+            core.parent.mkdir(parents=True)
+            core_bytes = b"authenticated SDK core"
+            core.write_bytes(core_bytes)
+            runtime = {"sdkCore": {
+                "bytes": len(core_bytes), "sha256": hashlib.sha256(core_bytes).hexdigest()}}
+            build = root / "build"
+            staged = build / "source"
+            plugin = staged / recipe.PLUGIN_RELATIVE_PATH
+            plugin.parent.mkdir(parents=True)
+            plugin.write_bytes(b"plugin")
+            output = root / "out" / recipe.PLUGIN_NAME
+            calls = []
+
+            def fake_run(command, **kwargs):
+                calls.append((command, kwargs))
+                return mock.Mock(returncode=0, stdout="", stderr="")
+
+            with mock.patch.object(recipe, "_prepare_source", return_value=staged), \
+                    mock.patch.object(recipe, "_cmake_flags", return_value=["-DFIXTURE=ON"]), \
+                    mock.patch.object(recipe, "_run", side_effect=fake_run), \
+                    mock.patch.object(recipe, "_set_rpath"), \
+                    mock.patch.object(recipe, "_publish", return_value=(["$ORIGIN"], [])):
+                details = recipe._build(root / "source", build, output, sdk, "pristine", {}, 1, runtime)
+
+            self.assertEqual(details["sdkCore"], {
+                "name": recipe.SDK_CORE_NAME,
+                "bytes": len(core_bytes),
+                "sha256": hashlib.sha256(core_bytes).hexdigest(),
+            })
+            output.parent.mkdir(parents=True)
+            output.write_bytes(b"published artifact")
+            runtime_metadata = {
+                "version": recipe.CI_BUILD_NUMBER,
+                "wheelVersion": "2026.5.0.dev20261014",
+                "artifact": "openvino.whl",
+                "artifactSha256": "a" * 64,
+            }
+            with mock.patch.object(recipe, "_version", return_value="fixture-tool"):
+                receipt = recipe._receipt(output, details, runtime_metadata)
+            self.assertEqual(receipt["build"]["sdkCore"], details["sdkCore"])
+            self.assertEqual(len(calls), 2)
 
     def test_readelf_contract_rejects_absolute_runpath(self):
         dynamic = " 0x000000000000001d (RUNPATH)            Library runpath: [/private/build/lib]"
@@ -246,6 +328,154 @@ class OpenVinoGpuRecipeTests(unittest.TestCase):
             self.assertEqual(receipt["runtimeWheel"]["sha256"], "a" * 64)
             self.assertEqual(receipt["sourceRevision"], recipe.SOURCE_COMMIT)
             self.assertEqual(receipt["patchSha256"], recipe.PATCH_SHA256)
+
+    def test_jobs_parser_defaults_validates_bounds_and_rejects_before_build(self):
+        with mock.patch.dict(recipe.os.environ, {}, clear=True):
+            defaults = recipe._parse_args(["--build", "build", "--out", "plugin.so"])
+        self.assertEqual(defaults.jobs, recipe.DEFAULT_JOBS)
+        selected = recipe._parse_args(["--jobs", "4", "--build", "build", "--out", "plugin.so"])
+        self.assertEqual(selected.jobs, 4)
+        with mock.patch.dict(recipe.os.environ, {"CMAKE_BUILD_PARALLEL_LEVEL": "4"}):
+            self.assertEqual(recipe._parse_args(["--build", "build", "--out", "out"]).jobs, 4)
+        with mock.patch.dict(recipe.os.environ, {"CMAKE_BUILD_PARALLEL_LEVEL": "0"}), \
+                redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            recipe._parse_args(["--build", "build", "--out", "out"])
+
+        for value in ("0", "-1", str(recipe.MAX_JOBS + 1), "not-an-integer"):
+            with self.subTest(value=value), redirect_stderr(io.StringIO()), \
+                    mock.patch.object(recipe, "_runtime_pin") as runtime_pin, \
+                    mock.patch.object(recipe, "_build") as build:
+                with self.assertRaises(SystemExit):
+                    recipe.main(["--jobs", value, "--build", "build", "--out", "plugin.so"])
+                runtime_pin.assert_not_called()
+                build.assert_not_called()
+
+    def test_build_jobs_reach_cmake_environment_command_and_receipt(self):
+        with tempfile.TemporaryDirectory(prefix="openvino-jobs-fixture-") as directory:
+            root = Path(directory)
+            source = root / "source"
+            build = root / "build"
+            output = root / "out" / recipe.PLUGIN_NAME
+            staged = build / "source"
+            plugin = staged / recipe.PLUGIN_RELATIVE_PATH
+            plugin.parent.mkdir(parents=True)
+            plugin.write_bytes(b"plugin")
+            calls = []
+
+            def fake_run(command, **kwargs):
+                calls.append((command, kwargs))
+                return mock.Mock(returncode=0, stdout="", stderr="")
+
+            with mock.patch.object(recipe, "_prepare_source", return_value=staged), \
+                    mock.patch.object(recipe, "_run", side_effect=fake_run), \
+                    mock.patch.object(recipe, "_set_rpath"), \
+                    mock.patch.object(recipe, "_regular"), \
+                    mock.patch.object(recipe, "_publish", return_value=(["$ORIGIN"], [])):
+                details = recipe._build(source, build, output, None, "pristine", {"fixture": "deadbeef"}, 4)
+
+            self.assertEqual(details["jobs"], 4)
+            self.assertIn("CMAKE_BUILD_PARALLEL_LEVEL=4", details["buildFlags"])
+            self.assertEqual(calls[1][0][-2:], ["--parallel", "4"])
+            self.assertEqual([kwargs["env"]["CMAKE_BUILD_PARALLEL_LEVEL"] for _, kwargs in calls], ["4", "4"])
+
+            output.parent.mkdir(parents=True)
+            output.write_bytes(b"artifact")
+            runtime = {
+                "version": recipe.CI_BUILD_NUMBER,
+                "wheelVersion": "2026.5.0.dev20261014",
+                "artifact": "openvino.whl",
+                "artifactSha256": "a" * 64,
+            }
+            with mock.patch.object(recipe, "_version", return_value="fixture-tool"):
+                receipt = recipe._receipt(output, details, runtime)
+            self.assertEqual(receipt["build"]["jobs"], 4)
+
+    def test_sdk_hook_fixture_replaces_source_core_and_preserves_interface(self):
+        with tempfile.TemporaryDirectory(prefix="openvino-sdk-hook-") as directory:
+            root = Path(directory)
+            source = root / "source"
+            include = source / "include"
+            include.mkdir(parents=True)
+            (include / "openvino_fixture.hpp").write_text(
+                "#pragma once\nextern \"C\" int otc_core_value();\n", encoding="utf-8")
+            (source / "core.cpp").write_text(
+                '#error "the discarded source core must not compile"\n', encoding="utf-8")
+            (source / "helper.cpp").write_text(textwrap.dedent("""
+                #include <openvino_fixture.hpp>
+                #if !defined(OTC_ABI_OK) || !defined(OTC_THREADING_OK)
+                #error "SDK interface requirements were not propagated"
+                #endif
+                #if __cplusplus < 201703L
+                #error "SDK cxx_std_17 requirement was not propagated"
+                #endif
+                extern "C" int helper_value() { return otc_core_value(); }
+            """), encoding="utf-8")
+            (source / "plugin.cpp").write_text(textwrap.dedent("""
+                extern "C" int helper_value();
+                extern "C" int otc_plugin_value() { return helper_value(); }
+            """), encoding="utf-8")
+            sdk_source = root / "sdk_runtime.cpp"
+            sdk_source.write_text(
+                'extern "C" int otc_core_value() { return 7; }\n', encoding="utf-8")
+            sdk = root / "sdk"
+            sdk.mkdir()
+            sdk_core = sdk / "libopenvino.so.2650"
+            compiler = shutil.which(os.environ.get("CXX", "c++")) or shutil.which("c++")
+            self.assertIsNotNone(compiler)
+            compile_sdk = subprocess.run(
+                [compiler, "-shared", "-fPIC", "-Wl,-soname,libopenvino.so.2650",
+                 "-o", str(sdk_core), str(sdk_source)],
+                check=False, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            if compile_sdk.returncode:
+                self.fail(f"SDK fixture compiler failed:\n{compile_sdk.stdout}")
+            (sdk / "openvino/cmake").mkdir(parents=True)
+            (sdk / "openvino/libs").mkdir(parents=True)
+            shutil.copy2(sdk_core, sdk / "openvino/libs/libopenvino.so.2650")
+            (source / "CMakeLists.txt").write_text(textwrap.dedent("""
+                cmake_minimum_required(VERSION 3.26)
+                project(OpenVINO LANGUAGES CXX)
+                set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+                set(CMAKE_CXX_STANDARD 14)
+                add_library(openvino SHARED core.cpp)
+                add_library(openvino::runtime ALIAS openvino)
+                target_compile_features(openvino PUBLIC cxx_std_17)
+                target_compile_definitions(openvino PUBLIC OTC_ABI_OK)
+                target_include_directories(openvino PUBLIC
+                    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
+                add_library(otc_threading INTERFACE)
+                target_compile_definitions(otc_threading INTERFACE OTC_THREADING_OK)
+                target_link_libraries(openvino PUBLIC otc_threading)
+                add_library(openvino_core_dev INTERFACE)
+                add_library(openvino::core::dev ALIAS openvino_core_dev)
+                add_library(openvino_runtime_dev INTERFACE)
+                add_library(openvino::runtime::dev ALIAS openvino_runtime_dev)
+                target_link_libraries(openvino_runtime_dev INTERFACE openvino openvino::core::dev)
+                add_library(helper STATIC helper.cpp)
+                target_link_libraries(helper PUBLIC openvino::runtime PRIVATE openvino::runtime::dev)
+                add_library(plugin SHARED plugin.cpp)
+                target_link_libraries(plugin PRIVATE helper)
+            """), encoding="utf-8")
+            build = root / "build"
+            hook = recipe.ROOT / "assets/openvino/sdk-runtime.cmake"
+            configure = subprocess.run(
+                ["cmake", "-S", str(source), "-B", str(build), "-G", "Ninja",
+                 f"-DCMAKE_PROJECT_INCLUDE={hook}",
+                 f"-DOTC_OPENVINO_RUNTIME={sdk / 'openvino/libs/libopenvino.so.2650'}"],
+                check=False, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            if configure.returncode:
+                self.fail(f"SDK hook fixture configure failed:\n{configure.stdout}")
+            built = subprocess.run(
+                ["cmake", "--build", str(build), "--target", "plugin"],
+                check=False, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            if built.returncode:
+                self.fail(f"SDK hook fixture build failed:\n{built.stdout}")
+            self.assertFalse((build / "libopenvino.so").exists())
+            core_handle = ctypes.CDLL(str(sdk / "openvino/libs/libopenvino.so.2650"),
+                                      mode=ctypes.RTLD_GLOBAL)
+            self.assertIsNotNone(core_handle)
+            plugin = ctypes.CDLL(str(build / "libplugin.so"))
+            plugin.otc_plugin_value.restype = ctypes.c_int
+            self.assertEqual(plugin.otc_plugin_value(), 7)
 
     def test_default_source_is_optional_but_from_plugin_is_exclusive(self):
         args = recipe._parse_args(["--build", "build", "--out", "plugin.so"])

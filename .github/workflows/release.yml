@@ -7,14 +7,17 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
-  release:
+  app:
+    name: Build and test app
     runs-on: ubuntu-26.04
-    timeout-minutes: 120
-    env:
-      GH_TOKEN: ${{ github.token }}
+    timeout-minutes: 45
     steps:
       - name: Check out source
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -28,53 +31,18 @@ jobs:
       - name: Install GNOME Wayland runtime and dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install --yes gnome-shell pulseaudio libgbm1 libgtk-3-0 libnss3 libasound2t64 cmake g++ p7zip-full zip unzip zlib1g libzstd1 ninja-build patchelf pkg-config ocl-icd-opencl-dev
+          sudo apt-get install --yes gnome-shell pulseaudio libgbm1 libgtk-3-0 libnss3 libasound2t64 ccache
           npm install --global npm@11.18.0
 
-      - name: Set up voice runtime Python
-        uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
-        with:
-          python-version: 3.14.6
-
-      - name: Verify release
+      - name: Verify release and all functionality
         run: |
           if [[ "$GITHUB_REF" == refs/tags/* ]]; then
             test "$GITHUB_REF_NAME" = "v$(node -p 'require("./package.json").version')"
           fi
           npm run verify:ci
 
-      - name: Build and verify the optional voice pack
-        run: |
-          python scripts/prepare-voice-pack.py
-          npm run build:voice-pack
-
-      - name: Set up build-only Python for the native AI pack recipe
-        uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
-        with:
-          python-version: 3.11.15
-
-      - name: Build release files
-        run: |
-          npm run package
-          npm run build:face-pack
-          otc_CPU_ONLY=1 npm run verify:face-pack
-          # Bound the source compiler and its children; keep artifacts runner-owned.
-          sudo systemd-run --wait --pipe --collect \
-            --uid="$(id -u)" --gid="$(id -g)" --working-directory="$PWD" \
-            --property=MemoryMax=6G --property=MemorySwapMax=0 \
-            --setenv=PATH="$PATH" npm run build:upscale-pack
-          otc_CPU_ONLY=1 npm run verify:upscale-pack
-          # Exercise tiny native RIFE streams and FFmpeg/audio/cache composition.
-          npm run test:packs
-
-      - name: Check release assets
-        run: |
-          test -s release/otc-media-pack.zip
-          test -s release/otc-face-pack.zip
-          test -s release/otc-upscale-pack.zip
-          test -s release/otc-voice-pack.zip
-          cd release
-          sha256sum ./*.AppImage ./*.zip > SHA256SUMS
+      - name: Build AppImage and media assets
+        run: npm run package
 
       - name: Smoke-test packaged AppImage on Wayland
         run: |
@@ -86,19 +54,288 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: release-validation-${{ github.sha }}
+          name: validation-${{ github.sha }}
           if-no-files-found: warn
+          retention-days: 14
           path: |
             coverage/
             playwright-report/
             test-results/
 
-      - name: Publish GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Upload app release assets
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-app-${{ github.sha }}
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            release/*.AppImage
+            release/otc-media-pack.zip
+
+  openvino-shard:
+    name: Compile OpenVINO shard ${{ matrix.shard }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22.22.1
+          package-manager-cache: false
+
+      - name: Set up Python
+        uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
+        with:
+          python-version: 3.11.15
+
+      - name: Install compiler tools
         run: |
+          sudo apt-get update
+          sudo apt-get install --yes cmake g++ ninja-build ccache ocl-icd-opencl-dev patchelf pkg-config
+
+      # All objects are freshly compiled in this run; no cross-run cache exists.
+      - name: Compile assigned source objects
+        run: |
+          mkdir -p dist
+          set -o pipefail
+          sudo systemd-run --wait --pipe --collect \
+            --uid="$(id -u)" --gid="$(id -g)" --working-directory="$PWD" \
+            --property=MemoryMax=10G --property=MemorySwapMax=0 \
+            --setenv=PATH="$PATH" "$(command -v python3)" \
+            scripts/ci-openvino-build.py --mode shard --shard-index ${{ matrix.shard }} \
+            2>&1 | tee dist/openvino-shard-${{ matrix.shard }}.log
+
+      - name: Archive fresh compiler objects
+        run: tar -cf "$RUNNER_TEMP/ccache-shard-${{ matrix.shard }}.tar" -C dist/upscale-pack-ci/ccache .
+
+      - name: Transfer compiler objects to this run's pack builder
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: openvino-cache-${{ matrix.shard }}-${{ github.sha }}
+          path: ${{ runner.temp }}/ccache-shard-${{ matrix.shard }}.tar
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Preserve compiler report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: openvino-report-${{ matrix.shard }}-${{ github.sha }}
+          path: |
+            dist/openvino-shard-${{ matrix.shard }}.log
+            dist/upscale-pack-ci/build/cmake/.ninja_log
+          if-no-files-found: warn
+          retention-days: 1
+
+  ai-packs:
+    name: Build ${{ matrix.pack }} pack
+    needs: openvino-shard
+    runs-on: ubuntu-26.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - pack: face
+            python: 3.11.15
+          - pack: upscale
+            python: 3.11.15
+          - pack: voice
+            python: 3.14.6
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22.22.1
+          package-manager-cache: false
+
+      - name: Set up Python ${{ matrix.python }}
+        uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install pack build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes cmake g++ p7zip-full zip unzip zlib1g libzstd1 ninja-build patchelf pkg-config ocl-icd-opencl-dev ccache
+          npm install --global npm@11.18.0
+          npm update
+
+      - name: Build and verify face pack
+        if: matrix.pack == 'face'
+        run: |
+          npm run build:face-pack
+          otc_CPU_ONLY=1 npm run verify:face-pack
+
+      - name: Download this run's compiler shards
+        if: matrix.pack == 'upscale'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: openvino-cache-*-${{ github.sha }}
+          path: dist/upscale-pack-ci/inputs
+          merge-multiple: true
+
+      - name: Build and verify upscale pack
+        if: matrix.pack == 'upscale'
+        run: |
+          sudo systemd-run --wait --pipe --collect \
+            --uid="$(id -u)" --gid="$(id -g)" --working-directory="$PWD" \
+            --property=MemoryMax=10G --property=MemorySwapMax=0 \
+            --setenv=PATH="$PATH" --setenv=CMAKE_BUILD_PARALLEL_LEVEL=4 "$(command -v npm)" run build:upscale-pack -- --ci-source-build
+          otc_CPU_ONLY=1 npm run verify:upscale-pack
+
+      - name: Preserve source-link report
+        if: always() && matrix.pack == 'upscale'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: openvino-link-report-${{ github.sha }}
+          path: |
+            dist/upscale-pack-ci/build/cmake/.ninja_log
+            dist/upscale-pack-ci/ccache/stats.log
+          if-no-files-found: warn
+          retention-days: 1
+
+      - name: Build and verify voice pack
+        if: matrix.pack == 'voice'
+        run: |
+          python scripts/prepare-voice-pack.py
+          npm run build:voice-pack
+          test -s release/otc-voice-pack.zip
+
+      - name: Upload pack release ZIP
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-${{ matrix.pack }}-${{ github.sha }}
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+          path: release/otc-${{ matrix.pack }}-pack.zip
+
+      # Keep test-only model inputs out of release artifacts and publication.
+      - name: Upload face CPU-test inputs
+        if: matrix.pack == 'face'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: face-test-inputs-${{ github.sha }}
+          if-no-files-found: error
+          retention-days: 1
+          path: |
+            dist/face-pack/model.xml
+            dist/face-pack/model.bin
+            dist/face-pack-cache/fixtures/large.ppm
+            dist/face-pack-cache/fixtures/small.ppm
+
+  integration:
+    name: Test AI pack integration
+    needs: ai-packs
+    runs-on: ubuntu-26.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22.22.1
+          package-manager-cache: false
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes unzip
+          npm install --global npm@11.18.0
+          npm update
+
+      - name: Download face release ZIP
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-face-${{ github.sha }}
+          path: release
+
+      - name: Download upscale release ZIP
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-upscale-${{ github.sha }}
+          path: release
+
+      - name: Download face CPU-test inputs
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: face-test-inputs-${{ github.sha }}
+          path: dist
+
+      - name: Restore packs and run CPU integration tests
+        run: |
+          test -s release/otc-face-pack.zip
+          test -s release/otc-upscale-pack.zip
+          test -s dist/face-pack/model.xml
+          test -s dist/face-pack/model.bin
+          test -s dist/face-pack-cache/fixtures/large.ppm
+          test -s dist/face-pack-cache/fixtures/small.ppm
+          if unzip -Z1 release/otc-face-pack.zip | grep -Ex 'face-pack/model\.(xml|bin)' >/dev/null; then
+            echo 'face release ZIP unexpectedly contains model weights' >&2
+            exit 1
+          fi
+          unzip -q release/otc-face-pack.zip -d dist
+          unzip -q release/otc-upscale-pack.zip -d dist
+          test -x dist/face-pack/otc-face-blur
+          test -x dist/face-pack/otc-face-blur.bin
+          test -x dist/upscale-pack/otc-upscale
+          test -x dist/upscale-pack/otc-upscale.bin
+          otc_CPU_ONLY=1 npm run test:packs
+
+  publish:
+    name: Publish release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [app, ai-packs, integration]
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Download all release artifacts
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: release-*-${{ github.sha }}
+          path: release
+          merge-multiple: true
+
+      - name: Validate and checksum release assets
+        run: |
+          cd release
+          assets=(
+            "OneTrackCat-${GITHUB_REF_NAME#v}-ubuntu26-wayland-x86_64.AppImage"
+            otc-media-pack.zip otc-face-pack.zip otc-upscale-pack.zip otc-voice-pack.zip
+          )
+          for asset in "${assets[@]}"; do test -s "$asset"; done
+          for archive in "${assets[@]:1}"; do unzip -tq "$archive"; done
+          sha256sum "${assets[@]}" > SHA256SUMS
+          sha256sum -c SHA256SUMS
+
+      - name: Publish GitHub Release
+        run: |
+          cd release
+          mapfile -t assets < <(awk '{print $2}' SHA256SUMS)
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" release/*.AppImage release/*.zip release/SHA256SUMS --clobber
+            gh release upload "$GITHUB_REF_NAME" "${assets[@]}" SHA256SUMS --clobber
           else
             git log -1 --format=%b | sed '/^Validation:/,$d' > "$RUNNER_TEMP/release-notes.md"
-            gh release create "$GITHUB_REF_NAME" release/*.AppImage release/*.zip release/SHA256SUMS --notes-file "$RUNNER_TEMP/release-notes.md" --verify-tag
+            gh release create "$GITHUB_REF_NAME" "${assets[@]}" SHA256SUMS --notes-file "$RUNNER_TEMP/release-notes.md" --verify-tag
           fi

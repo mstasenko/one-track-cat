@@ -37,7 +37,7 @@
     "lint": "eslint .",
     "test": "node scripts/run-tests.mjs --total npm run test:suites",
     "test:suites": "npm run lint && npm run typecheck && npm run test:vitest && npm run test:upscale-recipes && node scripts/build-meme-pack.mjs --quiet && node scripts/verify-meme-pack.mjs && npm run test:e2e",
-    "test:upscale-recipes": "node scripts/run-tests.mjs python3 scripts/test_prepare_upscale_pack.py && node scripts/run-tests.mjs python3 scripts/test_build_openvino_gpu.py",
+    "test:upscale-recipes": "node scripts/run-tests.mjs python3 scripts/test_prepare_upscale_pack.py && node scripts/run-tests.mjs python3 scripts/test_build_openvino_gpu.py && node scripts/run-tests.mjs python3 scripts/test_ci_openvino_build.py",
     "verify:ci": "npm update && npm audit --audit-level=low && npm test",
     "test:vitest": "node scripts/run-tests.mjs vitest run --coverage && node scripts/run-tests.mjs node scripts/quality.mjs",
     "test:packs": "otc_CPU_ONLY=1 node scripts/smoke-upscale-pack.mjs && otc_CPU_ONLY=1 node scripts/run-tests.mjs vitest run --config vitest.pack.config.ts",

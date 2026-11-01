@@ -25,8 +25,11 @@ CI_BUILD_NUMBER = "2026.5.0-23457-7d81aad55a5"
 PLUGIN_NAME = "libopenvino_intel_gpu_plugin.so"
 PLUGIN_RELATIVE_PATH = Path("bin/intel64/Release") / PLUGIN_NAME
 PATCH_TARGET = "src/plugins/intel_gpu/src/graph/impls/onednn/reorder_onednn.cpp"
+SDK_CORE_MEMBER = "lib/libopenvino.so.2650"
+SDK_CORE_NAME = Path(SDK_CORE_MEMBER).name
 RPATH = "$ORIGIN"
-JOBS = 2
+DEFAULT_JOBS = 2
+MAX_JOBS = 64
 REQUIRED_SUBMODULES = (
     "src/plugins/intel_gpu/thirdparty/onednn_gpu",
     "thirdparty/ocl/cl_headers",
@@ -42,7 +45,7 @@ REQUIRED_SUBMODULES = (
 _GPU_ON = (
     "BUILD_SHARED_LIBS ENABLE_LIBRARY_VERSIONING ENABLE_INTEL_GPU ENABLE_ONEDNN_FOR_GPU ENABLE_CM_FOR_GPU "
     "USE_BUILD_TYPE_SUBFOLDER "
-    "ENABLE_SYSTEM_OPENCL ENABLE_SYSTEM_TBB ENABLE_GIL_PYTHON_API"
+    "ENABLE_SYSTEM_OPENCL ENABLE_SYSTEM_TBB ENABLE_GIL_PYTHON_API ENABLE_FASTER_BUILD"
 ).split()
 _GPU_OFF = (
     "ENABLE_INTEL_CPU ENABLE_INTEL_NPU ENABLE_PROXY ENABLE_AUTO ENABLE_AUTO_BATCH "
@@ -55,6 +58,8 @@ _GPU_OFF = (
     "ENABLE_OV_GGUF_FRONTEND ENABLE_SYSTEM_PUGIXML ENABLE_SYSTEM_FLATBUFFERS "
     "ENABLE_SYSTEM_PROTOBUF ENABLE_SYSTEM_SNAPPY ENABLE_SYSTEM_LEVEL_ZERO OS_FOLDER"
 ).split()
+# ENABLE_FASTER_BUILD uses upstream precompiled headers; runtime optimization
+# and enabled GPU backends remain unchanged.
 # GIL=OFF requests Python 3.13+ even when bindings are disabled. Keep it ON
 # for the build-only Python 3.11 interpreter; ENABLE_PYTHON remains OFF.
 GPU_CMAKE_OPTIONS = tuple((name, "ON") for name in _GPU_ON) + (
@@ -241,17 +246,26 @@ def _prepare_source(source: Path, build: Path, state: str) -> Path:
     return staged
 
 
-def _runtime_pin() -> dict[str, str]:
-    expression = "import('./scripts/upscale-pack-pins.mjs').then(m => process.stdout.write(JSON.stringify(m.releasePins.runtime)))"
+def _runtime_pin() -> dict[str, object]:
+    expression = (
+        "import {releasePins,payloadPins} from './scripts/upscale-pack-pins.mjs'; "
+        f"process.stdout.write(JSON.stringify({{...releasePins.runtime,sdkCore:payloadPins[{SDK_CORE_MEMBER!r}]}}))"
+    )
     try:
         value = json.loads(_output(["node", "--input-type=module", "-e", expression], cwd=ROOT))
     except (BuildError, json.JSONDecodeError) as exc:
         raise BuildError("could not read scripts/upscale-pack-pins.mjs runtime pin") from exc
-    required = {"version", "wheelVersion", "artifact", "artifactSha256"}
+    required = {"version", "wheelVersion", "artifact", "artifactSha256", "sdkCore"}
     if (not isinstance(value, dict) or not required.issubset(value) or
             not isinstance(value["artifactSha256"], str) or
             not re.fullmatch(r"[0-9a-f]{64}", value["artifactSha256"])):
         raise BuildError("runtime pin is incomplete or has an invalid wheel SHA")
+    sdk_core = value["sdkCore"]
+    if (not isinstance(sdk_core, dict) or
+            not isinstance(sdk_core.get("bytes"), int) or isinstance(sdk_core["bytes"], bool) or
+            sdk_core["bytes"] <= 0 or not isinstance(sdk_core.get("sha256"), str) or
+            not re.fullmatch(r"[0-9a-f]{64}", sdk_core["sha256"])):
+        raise BuildError("runtime pin is incomplete or has an invalid SDK core SHA")
     if value["version"] != CI_BUILD_NUMBER or value.get("gpuSourceRevision") != SOURCE_COMMIT:
         raise BuildError("runtime pin does not match the pinned OpenVINO source/build")
     return value
@@ -323,6 +337,19 @@ def _relocate_plugin(source: Path, build: Path, output: Path) -> dict[str, objec
     }
 
 
+def _verify_sdk_core(sdk: Path, expected: dict[str, object]) -> dict[str, object]:
+    path = sdk / "openvino" / "libs" / SDK_CORE_NAME
+    _regular(path, "authenticated SDK OpenVINO core")
+    # _runtime_pin validates this metadata; reject size before hashing a supplied file.
+    size = path.stat().st_size
+    if size != expected["bytes"]:
+        raise BuildError("SDK OpenVINO core does not match the authenticated payload pin")
+    actual = {"name": path.name, "bytes": size, "sha256": _sha256(path)}
+    if actual["sha256"] != expected["sha256"]:
+        raise BuildError("SDK OpenVINO core does not match the authenticated payload pin")
+    return actual
+
+
 def _cmake_flags(source: Path, sdk: Path | None) -> list[str]:
     flags = ["-G", "Ninja"]
     flags.extend(f"-D{name}={value}" for name, value in GPU_CMAKE_OPTIONS)
@@ -334,22 +361,30 @@ def _cmake_flags(source: Path, sdk: Path | None) -> list[str]:
         cmake = sdk / "openvino" / "cmake"
         if not cmake.is_dir():
             raise BuildError(f"SDK root lacks openvino/cmake: {sdk}")
-        flags.extend([f"-DCMAKE_PREFIX_PATH={cmake}", f"-DTBB_DIR={cmake}"])
+        flags.extend([f"-DCMAKE_PREFIX_PATH={cmake}", f"-DTBB_DIR={cmake}",
+                      f"-DCMAKE_PROJECT_INCLUDE={ROOT / 'assets/openvino/sdk-runtime.cmake'}",
+                      f"-DOTC_OPENVINO_RUNTIME={sdk / 'openvino/libs' / SDK_CORE_NAME}"])
     return flags
 
 
 def _build(source: Path, build: Path, output: Path, sdk: Path | None,
-           state: str, submodules: dict[str, str]) -> dict[str, object]:
+           state: str, submodules: dict[str, str], jobs: int,
+           runtime: dict[str, object] | None = None) -> dict[str, object]:
+    sdk_core = None
+    if sdk is not None:
+        if runtime is None or not isinstance(runtime.get("sdkCore"), dict):
+            raise BuildError("authenticated SDK core pin is unavailable")
+        sdk_core = _verify_sdk_core(sdk, runtime["sdkCore"])
     staged = _prepare_source(source, build, state)
     cmake_build = build / "cmake"
     flags = _cmake_flags(staged, sdk)
     env = dict(os.environ)
-    env.update({"CI_BUILD_NUMBER": CI_BUILD_NUMBER, "CMAKE_BUILD_PARALLEL_LEVEL": str(JOBS)})
+    env.update({"CI_BUILD_NUMBER": CI_BUILD_NUMBER, "CMAKE_BUILD_PARALLEL_LEVEL": str(jobs)})
     if sdk is not None:
         env["TBB_DIR"] = str(sdk / "openvino" / "cmake")
     _run(["cmake", "-S", str(staged), "-B", str(cmake_build), *flags], env=env)
     _run(["cmake", "--build", str(cmake_build), "--target", "openvino_intel_gpu_plugin",
-          "--parallel", str(JOBS)], env=env)
+          "--parallel", str(jobs)], env=env)
     plugin = staged / PLUGIN_RELATIVE_PATH
     _regular(plugin, "generated GPU plugin")
     _set_rpath(plugin)
@@ -357,16 +392,20 @@ def _build(source: Path, build: Path, output: Path, sdk: Path | None,
     sanitized = [flag.replace(str(staged), "<staged-source>") for flag in flags]
     if sdk is not None:
         sanitized = [flag.replace(str(sdk), "<sdk-root>") for flag in sanitized]
-    return {
+    details = {
         "mode": "source",
         "source": {
             "patchState": state,
             "patchMaterializedInBuildTree": True,
             "submodules": submodules,
         },
-        "buildFlags": sanitized + [f"CMAKE_BUILD_PARALLEL_LEVEL={JOBS}"],
+        "jobs": jobs,
+        "buildFlags": sanitized + [f"CMAKE_BUILD_PARALLEL_LEVEL={jobs}"],
         "plugin": {"rpath": published_rpaths, "needed": published_needed},
     }
+    if sdk_core is not None:
+        details["sdkCore"] = sdk_core
+    return details
 
 
 def _version(command: str) -> str:
@@ -381,7 +420,7 @@ def _version(command: str) -> str:
     return (result.stdout or "").splitlines()[0][:240] or "unknown"
 
 
-def _receipt(output: Path, details: dict[str, object], runtime: dict[str, str]) -> dict[str, object]:
+def _receipt(output: Path, details: dict[str, object], runtime: dict[str, object]) -> dict[str, object]:
     _patch_bytes()
     return {
         "format": 1,
@@ -417,6 +456,17 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--sdk-root", type=Path, help="extracted authenticated pinned wheel SDK")
     parser.add_argument("--build", type=Path, required=True, help="empty disposable build directory")
     parser.add_argument("--out", type=Path, required=True, help="new plugin output path")
+    def jobs(value: str) -> int:
+        try:
+            parsed = int(value, 10)
+        except ValueError as exc:
+            raise argparse.ArgumentTypeError("--jobs must be a positive integer") from exc
+        if not 1 <= parsed <= MAX_JOBS:
+            raise argparse.ArgumentTypeError(f"--jobs must be between 1 and {MAX_JOBS}")
+        return parsed
+    parser.add_argument("--jobs", type=jobs,
+                        default=os.environ.get("CMAKE_BUILD_PARALLEL_LEVEL", str(DEFAULT_JOBS)),
+                        help=f"parallel compile jobs (1-{MAX_JOBS}, default: {DEFAULT_JOBS})")
     return parser.parse_args(argv)
 
 
@@ -449,7 +499,7 @@ def main(argv: list[str] | None = None) -> int:
             if _inside(output, source) or _inside(output, build):
                 raise BuildError("output must not be inside source or build directories")
             state, submodules = _source_state(source)
-            details = _build(source, build, output, sdk, state, submodules)
+            details = _build(source, build, output, sdk, state, submodules, args.jobs, runtime)
             details["source"]["fetchedByRecipe"] = fetched
         receipt = _receipt(output, details, runtime)
         receipt_path = _write_receipt(output, receipt)

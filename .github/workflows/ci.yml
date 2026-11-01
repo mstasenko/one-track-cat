@@ -31,7 +31,7 @@ jobs:
       - name: Install GNOME Wayland test runtime
         run: |
           sudo apt-get update
-          sudo apt-get install --yes gnome-shell pulseaudio libgbm1 libgtk-3-0 libnss3 libasound2t64
+          sudo apt-get install --yes gnome-shell pulseaudio libgbm1 libgtk-3-0 libnss3 libasound2t64 ccache
 
       - name: Install dependencies
         run: npm install --global npm@11.18.0

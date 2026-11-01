@@ -110,6 +110,18 @@ for (const path of appFiles.filter((file) => codeExtensions.has(extname(file)) &
 }
 const excessiveCrap = metrics.filter(({ crap }) => crap > maximumCrap + Number.EPSILON)
 
+// Check action refs locally too: a truncated pin otherwise fails only when publishing finally runs.
+const workflowDirectory = resolve(root, '.github/workflows')
+const unpinnedActions = []
+for (const name of await readdir(workflowDirectory)) {
+  if (!/\.ya?ml$/.test(name)) continue
+  const text = await readFile(join(workflowDirectory, name), 'utf8')
+  for (const [, action] of text.matchAll(/^\s*uses:\s*["']?([^\s"'#]+)/gm)) {
+    if (action.startsWith('./') || action.startsWith('docker://')) continue
+    if (!/^[^@]+@[a-f0-9]{40}$/.test(action)) unpinnedActions.push(`${name}: ${action}`)
+  }
+}
+
 process.stdout.write('Maintainability\n')
 if (oversized.length) {
   process.stderr.write(`  ${failed} Source files are at most ${maximumLines} lines\n`)
@@ -127,6 +139,13 @@ if (excessiveCrap.length) {
   process.stdout.write(`  ${passed} Every function has CRAP ≤ ${maximumCrap}\n`)
 }
 
-if (oversized.length || excessiveCrap.length) process.exitCode = 1
-const failures = Number(oversized.length > 0) + Number(excessiveCrap.length > 0)
-process.stdout.write(`Results: ${2 - failures} passed, ${failures} failed, 0 skipped\n`)
+if (unpinnedActions.length) {
+  process.stderr.write(`  ${failed} GitHub actions use full immutable commit refs\n`)
+  for (const action of unpinnedActions) process.stderr.write(`    ${action}\n`)
+} else {
+  process.stdout.write(`  ${passed} GitHub actions use full immutable commit refs\n`)
+}
+
+if (oversized.length || excessiveCrap.length || unpinnedActions.length) process.exitCode = 1
+const failures = Number(oversized.length > 0) + Number(excessiveCrap.length > 0) + Number(unpinnedActions.length > 0)
+process.stdout.write(`Results: ${3 - failures} passed, ${failures} failed, 0 skipped\n`)

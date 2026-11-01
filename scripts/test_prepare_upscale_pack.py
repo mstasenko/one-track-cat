@@ -73,6 +73,47 @@ class FlashPackRecipeTests(unittest.TestCase):
             self.assertEqual(mode, 'source')
             builder.assert_called_once_with(root / 'work', root / 'sdk', pins)
 
+    def test_sdk_wheel_must_match_runtime_attestation_pin(self):
+        with mock.patch.object(recipe, 'WHEEL', ('unexpected.whl', *recipe.WHEEL[1:])):
+            with self.assertRaisesRegex(ValueError, 'SDK wheel differs'):
+                recipe.node_pins()
+
+    def test_ci_source_build_runs_trusted_linker_and_verifies_its_receipt(self):
+        work, sdk = Path('work'), Path('sdk')
+        pins = recipe.node_pins()
+        with mock.patch.object(recipe.subprocess, 'run') as child, \
+                mock.patch.object(recipe, '_verify_source_receipt', return_value={'bytes': 1}) as verify:
+            plugin, _ = recipe._build_source_gpu_plugin(work, sdk, pins, ci_source_build=True)
+        self.assertEqual(child.call_args.args[0], [
+            recipe.sys.executable, str(recipe.ROOT / 'scripts/ci-openvino-build.py'),
+            '--mode', 'link', '--out', str(work / 'gpu-plugin.so')])
+        verify.assert_called_once_with(plugin, Path(str(plugin) + '.buildreceipt.json'), pins, sdk)
+
+    def test_ci_source_build_cannot_accept_supplied_plugins_or_prepare_only(self):
+        with mock.patch.object(recipe, '_build_source_gpu_plugin') as builder:
+            for explicit, prepare_only in ((Path('untrusted.so'), False), (None, True)):
+                with self.subTest(explicit=explicit, prepare_only=prepare_only):
+                    with self.assertRaisesRegex(ValueError, 'CI source build cannot'):
+                        recipe.select_gpu_plugin(explicit, Path('work'), Path('sdk'), {},
+                                                 prepare_only=prepare_only, ci_source_build=True)
+            builder.assert_not_called()
+
+    def test_sdk_extraction_is_fresh_and_rejects_traversal(self):
+        with tempfile.TemporaryDirectory(prefix='sdk-extraction-') as directory:
+            root = Path(directory)
+            wheel = root / 'sdk.zip'
+            with zipfile.ZipFile(wheel, 'w') as archive:
+                archive.writestr('openvino/cmake/config.cmake', 'fixture')
+                archive.writestr('openvino/libs/libopenvino.so.2650', b'fixture')
+            recipe.extract_sdk(wheel, root / 'sdk')
+            self.assertEqual((root / 'sdk/openvino/libs/libopenvino.so.2650').read_bytes(), b'fixture')
+            with self.assertRaisesRegex(ValueError, 'already exists'):
+                recipe.extract_sdk(wheel, root / 'sdk')
+            with zipfile.ZipFile(wheel, 'w') as archive:
+                archive.writestr('openvino/include/../escape', b'bad')
+            with self.assertRaisesRegex(ValueError, 'invalid authenticated SDK entry'):
+                recipe.extract_sdk(wheel, root / 'bad-sdk')
+
     def test_invalid_known_fastpath_is_rejected(self):
         pins = recipe.node_pins()
         with tempfile.TemporaryDirectory(prefix='flash-pack-gpu-invalid-') as directory:
@@ -103,6 +144,8 @@ class FlashPackRecipeTests(unittest.TestCase):
             self.assertEqual(gpu['sourceRevision'], pins['releasePins']['runtime']['gpuSourceRevision'])
             self.assertEqual(gpu['patchSha256'], pins['releasePins']['runtime']['gpuPatchSha256'])
             self.assertEqual(gpu['mode'], 'source')
+            self.assertEqual(gpu['sdkCore'], {
+                'name': recipe.SDK_CORE_NAME, **pins['payloadPins'][recipe.SDK_CORE_MEMBER]})
 
     def test_source_receipt_must_match_fixed_source_patch_wheel_and_output(self):
         pins = recipe.node_pins()
@@ -111,6 +154,13 @@ class FlashPackRecipeTests(unittest.TestCase):
             directory = Path(directory)
             plugin = directory / 'gpu-plugin.so'
             plugin.write_bytes(b'fresh source plugin')
+            sdk = directory / 'sdk'
+            core = sdk / 'openvino/libs/libopenvino.so.2650'
+            core.parent.mkdir(parents=True)
+            core_bytes = b'authenticated SDK core'
+            core.write_bytes(core_bytes)
+            pins['payloadPins']['lib/libopenvino.so.2650'] = {
+                'bytes': len(core_bytes), 'sha256': hashlib.sha256(core_bytes).hexdigest()}
             receipt_path = directory / 'gpu-plugin.so.buildreceipt.json'
             receipt_path.write_text(json.dumps({
                 'format': 1,
@@ -120,14 +170,33 @@ class FlashPackRecipeTests(unittest.TestCase):
                 'runtimeWheel': {
                     'runtimeVersion': runtime['version'], 'version': runtime['wheelVersion'],
                     'artifact': runtime['artifact'], 'sha256': runtime['artifactSha256']},
-                'build': {'mode': 'source', 'source': {'patchMaterializedInBuildTree': True}}
+                'build': {
+                    'mode': 'source',
+                    'source': {'patchMaterializedInBuildTree': True},
+                    'sdkCore': {
+                        'name': 'libopenvino.so.2650',
+                        'bytes': len(core_bytes),
+                        'sha256': hashlib.sha256(core_bytes).hexdigest()}}
             }), encoding='utf-8')
-            self.assertEqual(recipe._verify_source_receipt(plugin, receipt_path, pins), recipe.check(plugin))
+            self.assertEqual(recipe._verify_source_receipt(plugin, receipt_path, pins, sdk),
+                             recipe.check(plugin))
             receipt = json.loads(receipt_path.read_text(encoding='utf-8'))
             receipt['patchSha256'] = '0' * 64
             receipt_path.write_text(json.dumps(receipt), encoding='utf-8')
             with self.assertRaisesRegex(ValueError, 'source pin'):
-                recipe._verify_source_receipt(plugin, receipt_path, pins)
+                recipe._verify_source_receipt(plugin, receipt_path, pins, sdk)
+
+            receipt['patchSha256'] = runtime['gpuPatchSha256']
+            receipt['build']['sdkCore']['sha256'] = '0' * 64
+            receipt_path.write_text(json.dumps(receipt), encoding='utf-8')
+            with self.assertRaisesRegex(ValueError, 'consumed SDK core'):
+                recipe._verify_source_receipt(plugin, receipt_path, pins, sdk)
+
+            receipt['build']['sdkCore']['sha256'] = hashlib.sha256(core_bytes).hexdigest()
+            receipt_path.write_text(json.dumps(receipt), encoding='utf-8')
+            core.write_bytes(b'tampered SDK core')
+            with self.assertRaisesRegex(ValueError, 'fixed size|fixed hash'):
+                recipe._verify_source_receipt(plugin, receipt_path, pins, sdk)
 
     def test_immutable_catalog_and_mode_inventory(self):
         catalog = recipe.load_catalog()

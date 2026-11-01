@@ -18,6 +18,8 @@ ASSETS = ROOT / "assets/flashvsr-plus"
 RIFE_ASSETS = ROOT / "assets/rife"  # existing reviewed RIFE/notices source only
 RIFE_WARP_ASSETS = ROOT / "native/upscale/rife-assets"
 NATIVE_ASSETS = ROOT / "native/upscale/flash-assets"
+SDK_CORE_MEMBER = "lib/libopenvino.so.2650"
+SDK_CORE_NAME = Path(SDK_CORE_MEMBER).name
 CATALOG_SHA256 = "58359ac7e061107de34983e2c0de26232c9fbd8f81987fd65a89ab380a8f8184"
 WHEEL = (
     "openvino-2026.5.0.dev20261014-23457-cp311-cp311-manylinux_2_28_x86_64.whl",
@@ -198,9 +200,13 @@ def node_pins():
     expression = ("import {releasePins,payloadPins,gpuPluginPath,gpuPluginPin,runtimeLibraryNames} "
                   "from './scripts/upscale-pack-pins.mjs'; "
                   "console.log(JSON.stringify({releasePins,payloadPins,gpuPluginPath,gpuPluginPin,runtimeLibraryNames}))")
-    return json.loads(subprocess.check_output(
+    pins = json.loads(subprocess.check_output(
         ["node", "--input-type=module", "-e", expression], cwd=ROOT
     ))
+    runtime = pins["releasePins"]["runtime"]
+    if WHEEL[0] != runtime["artifact"] or WHEEL[2] != runtime["artifactSha256"]:
+        raise ValueError("SDK wheel differs from the release runtime pin")
+    return pins
 
 
 def gpu_plugin_provenance(pins, path, mode):
@@ -217,13 +223,17 @@ def gpu_plugin_provenance(pins, path, mode):
     if mode == "qualified-relocation" and (
             actual["bytes"] != known["bytes"] or actual["sha256"] != known["sha256"]):
         raise ValueError("qualified GPU plugin differs from the known fast path")
-    return {
+    record = {
         "bytes": actual["bytes"], "sha256": actual["sha256"],
         "sourceRevision": source_revision, "patchSha256": patch_sha, "mode": mode,
     }
+    if mode == "source":
+        # Source selection verifies its fresh receipt against this core before packing.
+        record["sdkCore"] = {"name": SDK_CORE_NAME, **pins["payloadPins"][SDK_CORE_MEMBER]}
+    return record
 
 
-def _verify_source_receipt(plugin, receipt_path, pins):
+def _verify_source_receipt(plugin, receipt_path, pins, sdk):
     try:
         receipt = json.loads(Path(receipt_path).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
@@ -250,22 +260,55 @@ def _verify_source_receipt(plugin, receipt_path, pins):
     if (not isinstance(build, dict) or build.get("mode") != "source" or
             not isinstance(source, dict) or source.get("patchMaterializedInBuildTree") is not True):
         raise ValueError("fresh GPU build was not a complete source build")
+    core_pin = pins["payloadPins"][SDK_CORE_MEMBER]
+    core_path = Path(sdk) / "openvino" / "libs" / SDK_CORE_NAME
+    actual_core = check(core_path, core_pin["bytes"], core_pin["sha256"])
+    consumed_core = build.get("sdkCore")
+    expected_core = {"name": SDK_CORE_NAME, **actual_core}
+    if consumed_core != expected_core:
+        raise ValueError("fresh GPU source build consumed SDK core differs")
     return actual
 
 
-def _build_source_gpu_plugin(work, sdk, pins):
+def extract_sdk(wheel, sdk):
+    """Extract an authenticated wheel into a fresh private SDK directory."""
+    sdk = Path(sdk)
+    if sdk.exists() or sdk.is_symlink():
+        raise ValueError("SDK destination already exists")
+    with zipfile.ZipFile(wheel) as archive:
+        seen = set()
+        for info in archive.infolist():
+            if not info.filename.startswith(("openvino/include/", "openvino/cmake/", "openvino/libs/")) or info.is_dir():
+                continue
+            if (not safe(info.filename) or info.filename in seen or
+                    stat.S_ISLNK(info.external_attr >> 16) or info.file_size > 128 * 1024**2):
+                raise ValueError("invalid authenticated SDK entry")
+            seen.add(info.filename)
+            write(sdk / info.filename, archive.read(info))
+    if not (sdk / "openvino/cmake").is_dir() or not (sdk / "openvino/libs").is_dir():
+        raise ValueError("authenticated SDK directories are missing")
+
+
+def _build_source_gpu_plugin(work, sdk, pins, ci_source_build=False):
     plugin = Path(work) / "gpu-plugin.so"
     build = Path(work) / "gpu-plugin-build"
-    subprocess.run([
-        sys.executable, str(ROOT / "scripts/build-openvino-gpu.py"),
-        "--sdk-root", str(sdk), "--build", str(build), "--out", str(plugin),
-    ], check=True)
-    actual = _verify_source_receipt(plugin, Path(str(plugin) + ".buildreceipt.json"), pins)
+    command = [sys.executable, str(ROOT / "scripts/build-openvino-gpu.py"),
+               "--sdk-root", str(sdk), "--build", str(build), "--out", str(plugin)]
+    if ci_source_build:
+        command = [sys.executable, str(ROOT / "scripts/ci-openvino-build.py"),
+                   "--mode", "link", "--out", str(plugin)]
+    subprocess.run(command, check=True)
+    actual = _verify_source_receipt(plugin, Path(str(plugin) + ".buildreceipt.json"), pins, sdk)
     return plugin, actual
 
 
-def select_gpu_plugin(explicit, work, sdk, pins, prepare_only=False):
+def select_gpu_plugin(explicit, work, sdk, pins, prepare_only=False, ci_source_build=False):
     """Select only the known relocation or a freshly receipt-verified source build."""
+    if ci_source_build:
+        if explicit is not None or prepare_only:
+            raise ValueError("CI source build cannot use a supplied plugin or --prepare-only")
+        plugin, _ = _build_source_gpu_plugin(work, sdk, pins, ci_source_build=True)
+        return plugin, "source"
     fastpath = ROOT / "dist/upscale-pack-cache/artifacts/libopenvino_intel_gpu_plugin-otc-reorder-cache.so"
     if explicit is not None:
         path = Path(explicit)
@@ -391,7 +434,11 @@ def main():
     parser.add_argument("--archive", type=Path, default=ROOT / "release/otc-upscale-pack.zip")
     parser.add_argument("--gpu-plugin", type=Path, default=None,
                         help="explicitly select the known pinned relocatable GPU plugin")
+    parser.add_argument("--ci-source-build", action="store_true",
+                        help="link compiler shards from this CI run before packing")
     args = parser.parse_args()
+    if args.ci_source_build and (args.prepare_only or args.gpu_plugin):
+        parser.error("--ci-source-build cannot use --prepare-only or --gpu-plugin")
     output = target(args.out, ROOT / "dist", True)
     archive_output = target(args.archive, ROOT / "release", False)
     cache = ROOT / "dist/upscale-pack-cache/artifacts"
@@ -414,18 +461,10 @@ def main():
         wheel = fetch(cache, WHEEL[0], WHEEL[1] or None, WHEEL[2], WHEEL[3])
         materialize_runtime_notice(work, wheel, pins)
         sdk = work / "sdk"
-        with zipfile.ZipFile(wheel) as archive:
-            seen = set()
-            for info in archive.infolist():
-                if not info.filename.startswith(("openvino/include/", "openvino/cmake/", "openvino/libs/")) or info.is_dir():
-                    continue
-                if (not safe(info.filename) or info.filename in seen or
-                        stat.S_ISLNK(info.external_attr >> 16) or info.file_size > 128 * 1024**2):
-                    raise ValueError("invalid authenticated SDK entry")
-                seen.add(info.filename)
-                write(sdk / info.filename, archive.read(info))
+        extract_sdk(wheel, sdk)
         selected_gpu, gpu_mode = select_gpu_plugin(
-            args.gpu_plugin, work, sdk, pins, prepare_only=args.prepare_only)
+            args.gpu_plugin, work, sdk, pins, prepare_only=args.prepare_only,
+            ci_source_build=args.ci_source_build)
         crypto = work / "openssl"
         for name, size, sha in DEBS:
             package = fetch(cache, name, size, sha,
@@ -462,7 +501,8 @@ def main():
             return
         build = work / "native-build"
         env = {**os.environ, "LD_LIBRARY_PATH": str(runtime) + ":" + str(sdk / "openvino/libs"),
-               "OMP_NUM_THREADS": "2", "OPENBLAS_NUM_THREADS": "1", "otc_CPU_ONLY": "1"}
+               "OMP_NUM_THREADS": "2", "OPENBLAS_NUM_THREADS": "1", "otc_CPU_ONLY": "1",
+               "CMAKE_BUILD_PARALLEL_LEVEL": os.environ.get("CMAKE_BUILD_PARALLEL_LEVEL", "2")}
         subprocess.run(["cmake", "-S", str(args.native_root), "-B", str(build), "-DCMAKE_BUILD_TYPE=Release",
                         "-DUPSCALE_EXECUTABLE_CACHE=ON",
                         "-DUPSCALE_GPU_PLUGIN=" + str(runtime / gpu_name),
@@ -470,7 +510,7 @@ def main():
                         "-DOPENSSL_INCLUDE_DIR=" + str(crypto / "usr/include"),
                         "-DOPENSSL_CRYPTO_LIBRARY=" + str(runtime / "libcrypto.so.3"),
                         "-DCMAKE_CXX_FLAGS=-I" + str(crypto / "usr/include/x86_64-linux-gnu")], check=True, env=env)
-        subprocess.run(["cmake", "--build", str(build), "--parallel", "2"], check=True, env=env)
+        subprocess.run(["cmake", "--build", str(build)], check=True, env=env)
         subprocess.run(["ctest", "--test-dir", str(build), "--output-on-failure"], check=True, env=env)
         subprocess.run(["node", str(ROOT / "scripts/build-upscale-pack-assemble.mjs"),
                         "--runtime", str(work / "runtime"), "--worker", str(build / "otc-upscale"),
