@@ -162,43 +162,64 @@ describe('bounded face process pipeline', () => {
     const byteCount = 36 * 1024 * 1024
     const expected = Buffer.alloc(byteCount)
     for (let index = 0; index < expected.length; index += 1) expected[index] = index % 251
+    const platform = vi.spyOn(process, 'platform', 'get').mockReturnValue('darwin')
+    try {
+      await runFacePipeline([
+        node([
+          `const total = ${byteCount}`,
+          'let offset = 0',
+          'function writeChunk() {',
+          '  const length = Math.min(1024 * 1024, total - offset)',
+          '  const chunk = Buffer.allocUnsafe(length)',
+          '  for (let index = 0; index < length; index += 1) chunk[index] = (offset + index) % 251',
+          '  offset += length',
+          '  if (!process.stdout.write(chunk)) { process.stdout.once(\'drain\', writeChunk); return }',
+          '  if (offset < total) writeChunk(); else process.stdout.end()',
+          '}',
+          'writeChunk()'
+        ].join(';')),
+        node([
+          'let inputEnded = false',
+          'let pending = 0',
+          'process.stdin.on(\'data\', (chunk) => {',
+          '  pending += 1',
+          '  process.stdin.pause()',
+          '  setTimeout(() => {',
+          '    process.stdout.write(chunk)',
+          '    pending -= 1',
+          '    if (inputEnded && pending === 0) process.stdout.end(); else process.stdin.resume()',
+          '  }, 1)',
+          '})',
+          'process.stdin.on(\'end\', () => { inputEnded = true; if (pending === 0) process.stdout.end() })',
+          'process.stdin.resume()'
+        ].join(';')),
+        node([
+          `const output = require('node:fs').createWriteStream(${JSON.stringify(path)})`,
+          'process.stdin.pipe(output)',
+          "output.on('finish', () => { process.stdout.write('out_time_us=1000000\\n'); process.stdout.end() })"
+        ].join(';'))
+      ], 'upscale-large-stream', 1, { phase: 'upscaling' })
+    } finally {
+      platform.mockRestore()
+    }
+    expect((await readFile(path)).equals(expected)).toBe(true)
+  }, 15000)
+
+  it('forwards EOF through a four-stage face and upscale chain', async () => {
+    directory = await mkdtemp(join(tmpdir(), 'otc-face-upscale-chain-'))
+    const path = join(directory, 'chain.rgb')
     await runFacePipeline([
-      node([
-        `const total = ${byteCount}`,
-        'let offset = 0',
-        'function writeChunk() {',
-        '  const length = Math.min(1024 * 1024, total - offset)',
-        '  const chunk = Buffer.allocUnsafe(length)',
-        '  for (let index = 0; index < length; index += 1) chunk[index] = (offset + index) % 251',
-        '  offset += length',
-        '  if (!process.stdout.write(chunk)) { process.stdout.once(\'drain\', writeChunk); return }',
-        '  if (offset < total) writeChunk(); else process.stdout.end()',
-        '}',
-        'writeChunk()'
-      ].join(';')),
-      node([
-        'let inputEnded = false',
-        'let pending = 0',
-        'process.stdin.on(\'data\', (chunk) => {',
-        '  pending += 1',
-        '  process.stdin.pause()',
-        '  setTimeout(() => {',
-        '    process.stdout.write(chunk)',
-        '    pending -= 1',
-        '    if (inputEnded && pending === 0) process.stdout.end(); else process.stdin.resume()',
-        '  }, 1)',
-        '})',
-        'process.stdin.on(\'end\', () => { inputEnded = true; if (pending === 0) process.stdout.end() })',
-        'process.stdin.resume()'
-      ].join(';')),
+      node("process.stdout.end('face-frame')"),
+      node("process.stdin.pipe(process.stdout)"),
+      node("process.stdin.pipe(process.stdout)"),
       node([
         `const output = require('node:fs').createWriteStream(${JSON.stringify(path)})`,
         'process.stdin.pipe(output)',
-        "output.on('finish', () => { process.stdout.write('out_time_us=1000000\\n'); process.stdout.end() })"
+        "output.on('finish', () => { process.stdout.end('out_time_us=500000\\n') })"
       ].join(';'))
-    ], 'upscale-large-stream', 1, { phase: 'upscaling' })
-    expect((await readFile(path)).equals(expected)).toBe(true)
-  }, 15000)
+    ], 'direct-four-stage', 1, { phase: 'upscaling' })
+    expect((await readFile(path)).equals(Buffer.from('face-frame'))).toBe(true)
+  })
 
   it('cancels a full upscaling relay with GPU EOF and output draining', async () => {
     directory = await mkdtemp(join(tmpdir(), 'otc-face-upscale-cancel-'))

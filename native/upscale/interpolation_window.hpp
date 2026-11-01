@@ -15,6 +15,7 @@ namespace otc::upscale {
 // Reading ahead keeps two frames, not a decoded-video cache.
 struct InterpolationWindow final {
   using Reader = std::function<std::optional<SourceFrame>(const SourceFrame*)>;
+  using Retainer = std::function<std::shared_ptr<SourceFrame>(SourceFrame&&)>;
   double fps;
   Reader reader;
   std::shared_ptr<SourceFrame> left;
@@ -24,6 +25,7 @@ struct InterpolationWindow final {
   // output clock is faster, source frames occupy their nearest output slots;
   // the gaps between those slots are the only frames eligible for RIFE.
   double outputFps = 0.0;
+  Retainer retainer{};
 
   double timestamp(std::uint64_t index) const {
     if (outputFps <= fps) return static_cast<double>(index) / fps;
@@ -47,11 +49,24 @@ struct InterpolationWindow final {
     // exact-geometry input may borrow its RGB bytes without copying them.
     const SourceFrame* previous = right ? &*right : (left ? &*left : nullptr);
     auto next = reader(previous);
-    while (next && left && next->duplicateBefore && !next->cutBefore)
+    if (!retainer) {
+      while (next && left && next->duplicateBefore && !next->cutBefore)
+        next = reader(previous);
+      if (!next) { eof = true; return false; }
+      if (!left) left = std::make_shared<SourceFrame>(std::move(*next));
+      else right = std::make_shared<SourceFrame>(std::move(*next));
+      return true;
+    }
+
+    auto retained = next ? retainer(std::move(*next)) : std::shared_ptr<SourceFrame>{};
+    while (retained && left && retained->duplicateBefore && !retained->cutBefore) {
+      retained.reset();
       next = reader(previous);
-    if (!next) { eof = true; return false; }
-    if (!left) left = std::make_shared<SourceFrame>(std::move(*next));
-    else right = std::make_shared<SourceFrame>(std::move(*next));
+      retained = next ? retainer(std::move(*next)) : std::shared_ptr<SourceFrame>{};
+    }
+    if (!retained) { eof = true; return false; }
+    if (!left) left = std::move(retained);
+    else right = std::move(retained);
     return true;
   }
 

@@ -8,6 +8,7 @@
 #include "spatial_ranges.hpp"
 #include "interpolation_window.hpp"
 #include "frame_writer.hpp"
+#include "frame_buffer_pool.hpp"
 
 #include <openvino/openvino.hpp>
 #include <openvino/runtime/intel_gpu/properties.hpp>
@@ -730,14 +731,17 @@ struct InputReader final {
   std::vector<std::uint8_t> previousSample;
   std::vector<std::uint8_t> previousOriginal{};
   std::size_t interpolationRange = 0;
+  std::shared_ptr<FrameBufferPool> pixelPool{};
 
   std::optional<SourceFrame> next(bool upscaleSpatial,
                                   const upscale::RgbFrame* previousFrame = nullptr) {
     if (readCount >= requiredFrames || stopRequested != 0) return std::nullopt;
     upscale::RgbFrame original{
         options.width, options.height,
-        std::vector<std::uint8_t>(checkedFrameBytes(options.width, options.height,
-                                                    "source dimensions"))};
+        pixelPool ? pixelPool->acquire()
+                  : std::vector<std::uint8_t>(checkedFrameBytes(options.width, options.height,
+                                                                  "source dimensions"))};
+    // Failed/partial reads discard their buffer; only complete frames can be retained.
     if (!readFrame(std::cin, original.pixels)) {
       if (stopRequested != 0) return std::nullopt;
       throw std::runtime_error("source ended before the requested duration");
@@ -850,8 +854,14 @@ int main(int argc, char** argv) {
     clockOptions.fps = alignedInterpolationFps(options.fps, options.outputFps, options.duration);
     const bool needFlash = !options.spatialRanges.empty() || options.outputWidth > options.width ||
                            options.outputHeight > options.height;
+    const bool needResize = options.outputWidth != options.width ||
+                            options.outputHeight != options.height;
     const bool needRife = requiredSourceFrames > 1 &&
         (needsRifeInterpolation(clockOptions.fps, options.outputFps) || !options.interpolationRanges.empty());
+    const auto sourceBytes = checkedFrameBytes(options.width, options.height, "source dimensions");
+    const bool poolInput = !needFlash && !needResize && sourceBytes <= 32U * 1024U * 1024U;
+    const auto pixelPool = poolInput ? std::make_shared<FrameBufferPool>(sourceBytes)
+                                     : std::shared_ptr<FrameBufferPool>{};
 
     std::ios::sync_with_stdio(false);
     std::cin.tie(nullptr);
@@ -919,13 +929,19 @@ int main(int argc, char** argv) {
           options, static_cast<std::size_t>(requiredSourceFrames), 0U, {}});
     }
 
+    input->pixelPool = pixelPool;
     InterpolationWindow window{
         clockOptions.fps,
         [&, needFlash](const SourceFrame* previous) -> std::optional<SourceFrame> {
           if (needFlash) return spatial->next();
           return input->next(false, previous == nullptr ? nullptr : &previous->frame);
         },
-        {}, {}, false, options.outputFps};
+        {}, {}, false, options.outputFps,
+        pixelPool ? InterpolationWindow::Retainer{
+                        [pixelPool](SourceFrame&& source) {
+                          return retainSourceFrame(std::move(source), pixelPool);
+                        }}
+                  : InterpolationWindow::Retainer{}};
     if (!window.initialize()) {
       if (stopRequested != 0) return 0;
       throw std::runtime_error("source ended before the requested duration");

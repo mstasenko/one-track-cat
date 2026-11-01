@@ -41,6 +41,8 @@ export default defineConfig({
         'src/main/model-download-schema.ts',
         'src/main/face-cache-cleanup.ts',
         'src/main/face-process.ts',
+        'src/main/face-process-stream.ts',
+        'src/main/ffmpeg-environment.ts',
         'src/main/face-export.ts',
         'src/main/face-preview.ts',
         'src/main/face-preview-cache.ts',

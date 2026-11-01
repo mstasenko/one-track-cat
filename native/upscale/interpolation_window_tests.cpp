@@ -1,4 +1,5 @@
 #include "interpolation_window.hpp"
+#include "frame_buffer_pool.hpp"
 
 #include <algorithm>
 #include <cassert>
@@ -290,6 +291,41 @@ void checkBorrowedPreviousAcrossDuplicateSkips() {
          !observations[5].duplicate);
 }
 
+void checkRetainerRecyclesSkippedCandidates() {
+  auto pool = std::make_shared<FrameBufferPool>(1U);
+  const std::vector<SourceFrame> source{
+      {0, {1, 1, {10}}, false, false},
+      {1, {1, 1, {10}}, false, true},
+      // A cut is retained even when duplicateBefore is set.
+      {2, {1, 1, {20}}, true, true},
+      {3, {1, 1, {30}}, false, false}};
+  std::size_t next = 0U;
+  InterpolationWindow window{
+      60.0,
+      [&](const SourceFrame*) -> std::optional<SourceFrame> {
+        if (next == source.size()) return std::nullopt;
+        return source[next++];
+      },
+      {}, {}, false, 60.0,
+      [pool](SourceFrame&& frame) { return retainSourceFrame(std::move(frame), pool); }};
+
+  assert(window.initialize());
+  window.ensureRight(0.0);
+  assert(window.left && window.left->index == 0U);
+  assert(window.right && window.right->index == 2U && window.right->cutBefore);
+  // Candidate 1 was wrapped before the duplicate check and its owner has
+  // already returned its byte buffer to the pool.
+  assert(pool->freeCount() == 1U);
+  auto recycled = pool->acquire();
+  recycled[0] = 77U;
+  assert(window.left->frame.pixels[0] == 10U);
+  assert(window.right->frame.pixels[0] == 20U);
+  pool->release(std::move(recycled));
+
+  assert(window.readOne());
+  assert(window.right && window.right->index == 3U);
+}
+
 }  // namespace
 
 int main() {
@@ -301,4 +337,5 @@ int main() {
   checkLongDuplicateHoldGuard();
   checkSourceClockFallback();
   checkBorrowedPreviousAcrossDuplicateSkips();
+  checkRetainerRecyclesSkippedCandidates();
 }

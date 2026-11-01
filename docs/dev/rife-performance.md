@@ -119,3 +119,45 @@ FFmpeg allocator settings. Future wall-time comparisons must include these.
 A tiny CPU graph audit ruled out whole-timeline 4:4:4 promotion: only the xfade
 inputs are promoted, and its output returns to 4:2:0 before concat. No cosmetic
 pixel-format change was added. The running export was not stopped or modified.
+
+### Full Electron production qualification, 2026-10-31
+
+The representative comparison was repeated through the full Electron export
+path, including both source inputs, the join graph, AAC, and the native RIFE
+worker. Three baseline and three production-pool MP4s were byte-identical by
+case:
+
+| Case | Baseline wall | Production-pool wall | SHA-256 |
+| --- | ---: | ---: | --- |
+| 0 | 125.1826 s | 84.1251 s | `5cc6d9f861be5c8ecd36f046049dc31f0bb1b9c2ea3d48bb360a52f4b20db5e9` |
+| 1 | 124.7823 s | 97.1832 s | `d75daf28fc4d6750ffb6069fe7659558ba218d3f42d78c42b05e6cd2ab013296` |
+| 2 | 115.3008 s | 86.1326 s | `3050e6744c6959fa7ac49f216f434a2c979c787918d3e74012529e9fa1b8a36e` |
+
+The weighted harness result (`dist/rife-optimization/production-harness/weighted-results.json`)
+projects the baseline at **118.3656 minutes** and production-pool at
+**86.1094 minutes before final remux overhead**, a **27.251% reduction**. The
+baseline projection is calibrated against the actual 117.84-minute game2
+export. This full-path result supersedes the earlier subset-only timing as the
+representative performance evidence; the earlier 106- and 94-minute numbers
+remain historical short-sample estimates.
+
+On Linux, the generic face pipeline shares the first decoder's stdout file
+descriptor with the next pipeline child. Only that direct first decoder gets
+the scoped FFmpeg allocator profile: 2 arenas, a 32 MiB mmap threshold, and a
+64 MiB trim threshold instead of the ordinary 128 KiB thresholds. Other
+FFmpeg children and ordinary jobs retain the default profile, and the copied
+environment does not mutate Electron's `process.env`.
+
+The native input pool caches at most two free frame-sized buffers (64 MiB
+maximum), in addition to the live window/writer frames. Only exact-size,
+unmodified input is eligible; resize, Flash, and other transformed inputs use
+the fallback allocation path. The scoped allocator is
+not a universal memory reduction: on the 4K 33-cut/353-compact-caption
+qualification, peak process-group memory rose from about 5.2 GiB to 5.5 GiB
+(approximately 6%) while allocator syscall churn fell substantially.
+
+Additional B580 checks produced byte-identical MP4s for ordinary GPU encoding,
+the actual two-second overlap join, and the long source hold. Cancellation
+through the editor IPC left no published output or device holders. The regular
+suite passed all 1,852 checks, all 43 native CPU checks passed, and the real CPU
+AI-pack suite passed seven integrations plus its five stream smoke checks.

@@ -1,9 +1,9 @@
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { PassThrough, type Readable } from 'node:stream'
 import { BrowserWindow } from 'electron'
 import type { HardwareLabel, JobPhase, JobProgress } from '../types'
 import { estimateEtaSeconds, ffmpegProgress } from './progress'
 import { ffmpegEnvironment } from './ffmpeg-environment'
+import { cleanupFaceInputBuffer, spawnFaceProcess, type FaceProcess } from './face-process-stream'
 
 export interface FaceCommand {
   executable: string
@@ -123,7 +123,7 @@ export async function runFacePreparation(id: string, action: (signal: AbortSigna
   } finally { active.delete(id); pending.delete(id) }
 }
 
-function requiredChild(children: ChildProcessWithoutNullStreams[], index: number): ChildProcessWithoutNullStreams {
+function requiredChild(children: FaceProcess[], index: number): FaceProcess {
   const child = children[index]
   if (!child) throw new Error('Face processing pipeline child is missing')
   return child
@@ -140,6 +140,7 @@ export async function runFacePipeline(
   const label = options.label ?? 'Masking faces'
   const prefix = options.message ? `${options.message} ` : ''
   const upscaling = options.phase === 'upscaling'
+  const directDecoderInput = process.platform === 'linux'
   const encodingContext = !upscaling && (options.phase === 'encoding' || options.encodingHardwareLabel !== undefined)
   const encodingProcessingLabel = encodingContext
     ? options.encodingHardwareLabel ? `Encoding video using ${options.encodingHardwareLabel}`
@@ -153,7 +154,7 @@ export async function runFacePipeline(
   const processingPhase = upscaling ? 'upscaling' : encodingContext ? 'encoding' : 'masking'
   const initialPhase = hasElevated ? 'preparing' : defaultPhase
   const pipeline = new Promise<void>((resolve, reject) => {
-    const children: (ChildProcessWithoutNullStreams | undefined)[] = []
+    const children: (FaceProcess | undefined)[] = []
     let failure: Error | undefined
     let remaining = 0
     let timer: ReturnType<typeof setTimeout> | undefined
@@ -266,14 +267,6 @@ export async function runFacePipeline(
       preparationCarry = ''
       discardPreparationLine = false
     }
-    const cleanupUpscaleInputBuffer = (): void => {
-      const buffer = upscaleInputBuffer
-      if (!buffer) return
-      children[0]?.stdout.unpipe(buffer)
-      buffer.unpipe()
-      buffer.destroy()
-      upscaleInputBuffer = undefined
-    }
     const reportWorkerLine = (line: string): void => {
       const upscaleProgress = upscaling ? upscaleProgressMarker.exec(line) : null
       if (upscaleProgress) {
@@ -337,7 +330,7 @@ export async function runFacePipeline(
     const finish = (): void => {
       if (remaining > 0 || settled || finishStarted) return
       finishStarted = true
-      cleanupUpscaleInputBuffer()
+      upscaleInputBuffer = cleanupFaceInputBuffer(upscaleInputBuffer, children[0]?.stdout)
       void (stderrCapture ?? Promise.resolve()).then(() => {
         if (settled) return
         settled = true
@@ -361,11 +354,11 @@ export async function runFacePipeline(
       if (stopping || settled) return
       stopping = true
       // Drop queued input before cooperative GPU EOF, even when the relay is full.
-      cleanupUpscaleInputBuffer()
+      upscaleInputBuffer = cleanupFaceInputBuffer(upscaleInputBuffer, children[0]?.stdout)
       for (let index = 0; index < children.length - 1; index += 1) {
         const source = children[index]
         const destination = children[index + 1]
-        if (source && destination) source.stdout.unpipe(destination.stdin)
+        if (source && destination?.stdin) source.stdout.unpipe(destination.stdin)
       }
       // Elevated GPU processes must see EOF and drain their stdout so they can
       // release the device context normally. Only ordinary CPU children get
@@ -374,7 +367,7 @@ export async function runFacePipeline(
       for (const [index, child] of children.entries()) {
         if (child?.exitCode !== null) continue
         if (index === 1 || commands[index]?.elevated || commands[index]?.gpuWorker) {
-          child.stdin.end()
+          child.stdin?.end()
           child.stdout.resume()
         } else {
           child.kill('SIGINT')
@@ -403,9 +396,13 @@ export async function runFacePipeline(
     })
     for (const [index, command] of commands.entries()) {
       if (failure) break
-      let child: ChildProcessWithoutNullStreams
+      let child: FaceProcess
       try {
-        child = spawn(command.executable, command.args, { stdio: ['pipe', 'pipe', 'pipe'], env: ffmpegEnvironment(command.executable) })
+        const directInput = directDecoderInput && index === 1
+          ? children[0]?.stdout
+          : undefined
+        child = spawnFaceProcess(command.executable, command.args,
+          ffmpegEnvironment(command.executable, directDecoderInput && index === 0), directInput)
       } catch (error) {
         const failure = error instanceof Error ? error : new Error(String(error))
         fail(authorizationError(command, failure) ?? failure)
@@ -434,7 +431,7 @@ export async function runFacePipeline(
       }
       child.once('error', (error) => fail(authorizationError(command, error) ?? error))
       // A downstream error closes its input; the child exit remains the authoritative failure.
-      child.stdin.on('error', (error: NodeJS.ErrnoException) => {
+      child.stdin?.on('error', (error: NodeJS.ErrnoException) => {
         if (error.code !== 'EPIPE') fail(authorizationError(command, error) ?? error)
       })
       child.once('close', (code, signal) => {
@@ -452,16 +449,16 @@ export async function runFacePipeline(
       finish()
       return
     }
-    const connectedChildren = children as ChildProcessWithoutNullStreams[]
-    requiredChild(connectedChildren, 0).stdin.end()
+    const connectedChildren = children as FaceProcess[]
+    requiredChild(connectedChildren, 0).stdin?.end()
     for (let index = 0; index < connectedChildren.length - 1; index += 1) {
       const source = requiredChild(connectedChildren, index)
       const destination = requiredChild(connectedChildren, index + 1)
-      if (upscaling && index === 0) {
+      if (upscaling && index === 0 && !directDecoderInput) {
         // One UHD RGB frame is ~24 MiB; keep decoder prefetch bounded.
         upscaleInputBuffer = new PassThrough({ highWaterMark: 32 * 1024 ** 2 })
-        source.stdout.pipe(upscaleInputBuffer).pipe(destination.stdin)
-      } else source.stdout.pipe(destination.stdin)
+        if (destination.stdin) source.stdout.pipe(upscaleInputBuffer).pipe(destination.stdin)
+      } else if (destination.stdin) source.stdout.pipe(destination.stdin)
     }
     let progressBuffer = ''
     const progressStream = requiredChild(connectedChildren, connectedChildren.length - 1).stdout.setEncoding('utf8')

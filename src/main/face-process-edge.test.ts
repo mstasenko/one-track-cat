@@ -9,6 +9,7 @@ import { cancelFaceExport, runFacePipeline } from './face-process'
 
 class FakeStream extends EventEmitter {
   readonly end = vi.fn()
+  readonly destroy = vi.fn()
   readonly resume = vi.fn()
   readonly unpipe = vi.fn()
   setEncoding(): this { return this }
@@ -29,24 +30,64 @@ class FakeChild extends EventEmitter {
 
 const command = (): FaceCommand => ({ executable: '/mock/worker', args: [] })
 
+function spawnFakeChildren(children: FakeChild[]): void {
+  childProcessMock.spawn.mockImplementation(() => {
+    const child = new FakeChild()
+    children.push(child)
+    if (process.platform === 'linux' && children.length === 2) Object.defineProperty(child, 'stdin', { value: null })
+    return child
+  })
+}
+
 afterEach(() => {
   vi.useRealTimers()
   childProcessMock.spawn.mockReset()
 })
 
 describe('face process failure escalation', () => {
+  it.each(['upscaling', 'encoding'] as const)('hands the first decoder output directly to the %s worker', async (phase) => {
+    const children: FakeChild[] = []
+    spawnFakeChildren(children)
+    const pending = runFacePipeline([command(), command(), command()], 'direct-fd', 1, {
+      phase
+    })
+    await Promise.resolve()
+    const spawnOptions = childProcessMock.spawn.mock.calls[1]?.[2] as { stdio: unknown[] } | undefined
+    expect(spawnOptions?.stdio[0]).toBe(children[0]?.stdout)
+    expect(children[0]?.stdout.destroy).toHaveBeenCalledOnce()
+    expect(children[1]?.stdin).toBeNull()
+    children.forEach((child) => {
+      child.exitCode = 0
+      child.emit('close', 0)
+    })
+    await expect(pending).resolves.toBeUndefined()
+  })
+
+  it('cancels a direct-input worker without ending its null stdin', async () => {
+    vi.useFakeTimers()
+    const children: FakeChild[] = []
+    spawnFakeChildren(children)
+    const pending = runFacePipeline([command(), command(), command()], 'direct-fd-cancel', 1, {
+      phase: 'encoding'
+    })
+    const rejected = expect(pending).rejects.toThrow('Job cancelled')
+    await Promise.resolve()
+    expect(cancelFaceExport('direct-fd-cancel')).toBe(true)
+    await vi.advanceTimersByTimeAsync(3000)
+    expect(children[1]?.stdin).toBeNull()
+    expect(children[1]?.stdout.resume).toHaveBeenCalledOnce()
+    children[1]?.emit('close', 0)
+    await rejected
+  })
+
   it('drains the worker while escalating FFmpeg children after cancellation', async () => {
     vi.useFakeTimers()
     const children: FakeChild[] = []
-    childProcessMock.spawn.mockImplementation(() => {
-      const child = new FakeChild()
-      children.push(child)
-      return child
-    })
+    spawnFakeChildren(children)
     const pending = runFacePipeline([command(), command(), command()], 'edge-cancel', 1)
     const rejected = expect(pending).rejects.toThrow('Job cancelled')
     await Promise.resolve()
-    children.forEach((child) => child.stdin.emit('error', { code: 'EPIPE' }))
+    children.forEach((child) => (child.stdin as FakeStream | null)?.emit('error', { code: 'EPIPE' }))
     expect(cancelFaceExport('edge-cancel')).toBe(true)
     await vi.advanceTimersByTimeAsync(3000)
     children[1]?.emit('close', 0)
@@ -54,8 +95,8 @@ describe('face process failure escalation', () => {
     expect(children[0]?.kill.mock.calls.some(([signal]) => signal === 'SIGKILL')).toBe(true)
     expect(children[2]?.kill.mock.calls.some(([signal]) => signal === 'SIGKILL')).toBe(true)
     expect(children[1]?.kill).not.toHaveBeenCalled()
-    expect(children[0]?.stdout.unpipe).toHaveBeenCalledWith(children[1]?.stdin)
-    expect(children[1]?.stdin.end).toHaveBeenCalledOnce()
+    expect(children[0]?.stdout.unpipe).not.toHaveBeenCalled()
+    expect(children[1]?.stdin).toBeNull()
     expect(children[1]?.stdout.unpipe).toHaveBeenCalledWith(children[2]?.stdin)
     expect(children[1]?.stdout.resume).toHaveBeenCalledOnce()
   })
@@ -63,11 +104,7 @@ describe('face process failure escalation', () => {
   it('waits for a cooperatively closing worker after FFmpeg escalation', async () => {
     vi.useFakeTimers()
     const children: FakeChild[] = []
-    childProcessMock.spawn.mockImplementation(() => {
-      const child = new FakeChild()
-      children.push(child)
-      return child
-    })
+    spawnFakeChildren(children)
     const pending = runFacePipeline([command(), command(), command()], 'edge-worker-close', 1)
     let settled = false
     void pending.then(() => { settled = true }, () => { settled = true })
@@ -94,11 +131,7 @@ describe('face process failure escalation', () => {
 
   it('fails immediately for a non-EPIPE pipeline input error', async () => {
     const children: FakeChild[] = []
-    childProcessMock.spawn.mockImplementation(() => {
-      const child = new FakeChild()
-      children.push(child)
-      return child
-    })
+    spawnFakeChildren(children)
     const pending = runFacePipeline([command(), command(), command()], 'edge-error', 1)
     await Promise.resolve()
     children[0]?.stdin.emit('error', { code: 'EIO', message: 'input failed' })
