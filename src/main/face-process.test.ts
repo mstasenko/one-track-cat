@@ -156,6 +156,93 @@ describe('bounded face process pipeline', () => {
     expect(cancelFaceExport('stream')).toBe(false)
   })
 
+  it('round-trips a large synthetic upscaling stream exactly', async () => {
+    directory = await mkdtemp(join(tmpdir(), 'otc-face-upscale-pipe-'))
+    const path = join(directory, 'upscaled.rgb')
+    const byteCount = 36 * 1024 * 1024
+    const expected = Buffer.alloc(byteCount)
+    for (let index = 0; index < expected.length; index += 1) expected[index] = index % 251
+    await runFacePipeline([
+      node([
+        `const total = ${byteCount}`,
+        'let offset = 0',
+        'function writeChunk() {',
+        '  const length = Math.min(1024 * 1024, total - offset)',
+        '  const chunk = Buffer.allocUnsafe(length)',
+        '  for (let index = 0; index < length; index += 1) chunk[index] = (offset + index) % 251',
+        '  offset += length',
+        '  if (!process.stdout.write(chunk)) { process.stdout.once(\'drain\', writeChunk); return }',
+        '  if (offset < total) writeChunk(); else process.stdout.end()',
+        '}',
+        'writeChunk()'
+      ].join(';')),
+      node([
+        'let inputEnded = false',
+        'let pending = 0',
+        'process.stdin.on(\'data\', (chunk) => {',
+        '  pending += 1',
+        '  process.stdin.pause()',
+        '  setTimeout(() => {',
+        '    process.stdout.write(chunk)',
+        '    pending -= 1',
+        '    if (inputEnded && pending === 0) process.stdout.end(); else process.stdin.resume()',
+        '  }, 1)',
+        '})',
+        'process.stdin.on(\'end\', () => { inputEnded = true; if (pending === 0) process.stdout.end() })',
+        'process.stdin.resume()'
+      ].join(';')),
+      node([
+        `const output = require('node:fs').createWriteStream(${JSON.stringify(path)})`,
+        'process.stdin.pipe(output)',
+        "output.on('finish', () => { process.stdout.write('out_time_us=1000000\\n'); process.stdout.end() })"
+      ].join(';'))
+    ], 'upscale-large-stream', 1, { phase: 'upscaling' })
+    expect((await readFile(path)).equals(expected)).toBe(true)
+  }, 15000)
+
+  it('cancels a full upscaling relay with GPU EOF and output draining', async () => {
+    directory = await mkdtemp(join(tmpdir(), 'otc-face-upscale-cancel-'))
+    const decoderReady = join(directory, 'decoder-ready')
+    const workerReady = join(directory, 'worker-ready')
+    const workerEof = join(directory, 'worker-eof')
+    const workerSignal = join(directory, 'worker-signal')
+    const pending = runFacePipeline([
+      node([
+        "const fs = require('node:fs')",
+        `fs.writeFileSync(${JSON.stringify(decoderReady)}, 'ready')`,
+        'const chunk = Buffer.alloc(1024 * 1024, 17)',
+        'function writeChunk() {',
+        '  if (!process.stdout.write(chunk)) process.stdout.once(\'drain\', writeChunk); else writeChunk()',
+        '}',
+        "process.stdout.on('error', () => process.exit(0))",
+        'writeChunk()'
+      ].join(';')),
+      {
+        ...node([
+          "const fs = require('node:fs')",
+          `fs.writeFileSync(${JSON.stringify(workerReady)}, 'ready')`,
+          'let bytes = 0',
+          "process.stdin.on('data', (chunk) => { bytes += chunk.length })",
+          "process.stdin.on('end', () => { fs.writeFileSync(" + JSON.stringify(workerEof) + ", String(bytes)); process.stdout.end() })",
+          "process.on('SIGINT', () => fs.writeFileSync(" + JSON.stringify(workerSignal) + ", 'SIGINT'))",
+          'process.stdin.pause()',
+          'setTimeout(() => process.stdin.resume(), 250)'
+        ].join(';')),
+        gpuWorker: true
+      },
+      node("process.stdin.resume(); process.stdin.on('end', () => process.exit(0))")
+    ], 'upscale-cancel-buffer', 10, { phase: 'upscaling' })
+    await vi.waitFor(async () => {
+      expect(await readFile(decoderReady, 'utf8')).toBe('ready')
+      expect(await readFile(workerReady, 'utf8')).toBe('ready')
+    })
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    expect(cancelFaceExport('upscale-cancel-buffer')).toBe(true)
+    await expect(pending).rejects.toThrow('Job cancelled')
+    expect(Number(await readFile(workerEof, 'utf8'))).toBeGreaterThan(0)
+    await expect(readFile(workerSignal)).rejects.toThrow()
+  }, 6000)
+
   it('hands only worker stderr to the optional capture callback and waits for it', async () => {
     let captured = ''
     let callbackFinished = false

@@ -4,6 +4,7 @@
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 #include <openvino/opsets/opset13.hpp>
 
@@ -147,10 +148,10 @@ void checkAlignedInterpolationClock() {
   clock.fps = alignedInterpolationFps(sourceOptions.fps, sourceOptions.outputFps, sourceOptions.duration);
   const auto count = outputFrameCount(sourceOptions.duration, sourceOptions.fps);
   std::uint64_t next = 0;
-  InterpolationWindow window{clock.fps, [&]() -> std::optional<SourceFrame> {
+  InterpolationWindow window{clock.fps, [&](const SourceFrame*) -> std::optional<SourceFrame> {
     if (next >= count) return std::nullopt;
     return SourceFrame{next++, RgbFrame{1, 1, {1, 2, 3}}, false};
-  }, std::nullopt, std::nullopt, false};
+  }, {}, {}, false};
   assert(window.initialize());
   const auto outputCount = outputFrameCount(sourceOptions.duration, sourceOptions.outputFps);
   std::size_t interpolated = 0;
@@ -264,6 +265,114 @@ void checkPortraitNonSpatialInputBypass() {
   assert(frame->frame.pixels == expected.pixels);
 }
 
+void checkInputReaderBorrowedDuplicateCache() {
+  const std::vector<std::uint8_t> first{1U, 2U, 3U, 4U, 5U, 6U};
+  const std::vector<std::uint8_t> second = first;
+  const std::vector<std::uint8_t> third{7U, 8U, 9U, 10U, 11U, 12U};
+  const auto streamBytes = [&] {
+    std::string bytes(reinterpret_cast<const char*>(first.data()), first.size());
+    bytes.append(reinterpret_cast<const char*>(second.data()), second.size());
+    bytes.append(reinterpret_cast<const char*>(third.data()), third.size());
+    return bytes;
+  }();
+
+  auto run = [&](int outputWidth, int outputHeight, bool expectBorrowed,
+                 bool upscaleSpatial = false) {
+    otc::upscale::Options options{};
+    options.width = 2;
+    options.height = 1;
+    options.outputWidth = outputWidth;
+    options.outputHeight = outputHeight;
+    options.interpolationRanges.emplace_back(0U, 3U);
+
+    std::istringstream inputStream(streamBytes);
+    auto* oldInput = std::cin.rdbuf(inputStream.rdbuf());
+    std::cin.clear();
+    otc::upscale::stopRequested = 0;
+    otc::upscale::InputReader reader{options, 3U, 0U, {}};
+    auto firstFrame = reader.next(upscaleSpatial);
+    assert(firstFrame.has_value());
+    // The first frame has no borrowed predecessor, so it preserves the
+    // compatibility cache until the window supplies one.
+    assert(!reader.previousOriginal.empty());
+
+    auto secondFrame = reader.next(
+        upscaleSpatial, upscaleSpatial ? nullptr : &firstFrame->frame);
+    assert(secondFrame.has_value() && secondFrame->duplicateBefore);
+    if (expectBorrowed) assert(reader.previousOriginal.empty());
+    else assert(!reader.previousOriginal.empty());
+
+    auto thirdFrame = reader.next(
+        upscaleSpatial, upscaleSpatial ? nullptr : &secondFrame->frame);
+    assert(thirdFrame.has_value() && !thirdFrame->duplicateBefore);
+    if (expectBorrowed) assert(reader.previousOriginal.empty());
+    else assert(!reader.previousOriginal.empty());
+
+    std::cin.rdbuf(oldInput);
+    std::cin.clear();
+  };
+
+  // Exact-size RIFE input borrows the retained predecessor and does not keep
+  // a second full-resolution previousOriginal buffer.
+  run(2, 1, true);
+  // Resize/Flash-compatible input cannot compare raw bytes through the
+  // retained prepared frame, so it keeps the explicit fallback cache.
+  run(4, 2, false);
+  run(4, 2, false, true);
+
+  // Existing direct callers that do not supply a retained predecessor must
+  // keep the old exact-byte fallback rather than losing duplicate detection.
+  {
+    otc::upscale::Options options{};
+    options.width = 2;
+    options.height = 1;
+    options.outputWidth = 2;
+    options.outputHeight = 1;
+    options.interpolationRanges.emplace_back(0U, 2U);
+    std::istringstream inputStream(streamBytes);
+    auto* oldInput = std::cin.rdbuf(inputStream.rdbuf());
+    std::cin.clear();
+    otc::upscale::stopRequested = 0;
+    otc::upscale::InputReader reader{options, 2U, 0U, {}};
+    assert(reader.next(false).has_value());
+    auto duplicate = reader.next(false);
+    assert(duplicate.has_value() && duplicate->duplicateBefore);
+    assert(!reader.previousOriginal.empty());
+    std::cin.rdbuf(oldInput);
+    std::cin.clear();
+  }
+}
+
+void checkMovingSameSizeFramesAndEndpointSelection() {
+  constexpr int width = 64;
+  constexpr int height = 48;
+  std::vector<std::uint8_t> pixels(static_cast<std::size_t>(width) * height * 3U);
+  for (std::size_t index = 0; index < pixels.size(); ++index)
+    pixels[index] = static_cast<std::uint8_t>((index * 37U + 11U) & 0xffU);
+  const auto* originalStorage = pixels.data();
+  otc::upscale::RgbFrame source{width, height, std::move(pixels)};
+
+  // Same-size preparation must transfer the already packed RGB allocation;
+  // copying this buffer once per source frame dominates long native streams.
+  auto prepared = otc::upscale::resizeRgb(std::move(source), width, height);
+  assert(prepared.width == width && prepared.height == height);
+  assert(prepared.pixels.data() == originalStorage);
+  assert(prepared.pixels.size() == static_cast<std::size_t>(width) * height * 3U);
+
+  const otc::upscale::RgbFrame first{1, 1, {1U, 2U, 3U}};
+  const otc::upscale::RgbFrame second{1, 1, {4U, 5U, 6U}};
+  otc::upscale::RgbFrame generated;
+  auto* selected = otc::upscale::processBaseFrame(
+      first, second, 0.0, false, nullptr, generated);
+  assert(selected == &first && generated.pixels.empty());
+  selected = otc::upscale::processBaseFrame(
+      first, second, 1.0, false, nullptr, generated);
+  assert(selected == &second && generated.pixels.empty());
+  selected = otc::upscale::processBaseFrame(
+      first, second, 0.5, false, nullptr, generated);
+  assert(selected == &second && generated.pixels.empty());
+}
+
 void checkRifeReshapeAndResume() {
   // A tiny packed-7 model returns the first RGB image. Its original static
   // extent deliberately differs from the worker's requested frame geometry.
@@ -336,6 +445,8 @@ int main() {
   checkAlignedInterpolationClock();
   checkPortraitOptions();
   checkPortraitNonSpatialInputBypass();
+  checkInputReaderBorrowedDuplicateCache();
+  checkMovingSameSizeFramesAndEndpointSelection();
 
   // Keep workerMain's first sync_with_stdio call from replacing the captured
   // stream buffers used by the no-feature passthrough checks.
@@ -363,7 +474,8 @@ int main() {
   assert(empty.exit == 1 && empty.output.empty() &&
          empty.errors.find("source ended") != std::string::npos);
   const auto truncated = runPassthrough(rgb.substr(0, 12));
-  assert(truncated.exit == 1 && truncated.errors.find("source ended") != std::string::npos);
+  assert(truncated.exit == 1 && truncated.errors.find("source ended") != std::string::npos &&
+         truncated.output.size() < rgb.size());
   const auto partial = runPassthrough(rgb.substr(0, 13));
   assert(partial.exit == 1 && partial.errors.find("partial RGB24") != std::string::npos);
 

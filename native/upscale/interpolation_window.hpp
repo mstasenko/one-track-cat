@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <functional>
 #include <optional>
+#include <memory>
 #include <utility>
 
 namespace otc::upscale {
@@ -13,11 +14,11 @@ namespace otc::upscale {
 // Only lower-rate clip ranges mark duplicates; explicit freezes remain intact.
 // Reading ahead keeps two frames, not a decoded-video cache.
 struct InterpolationWindow final {
-  using Reader = std::function<std::optional<SourceFrame>()>;
+  using Reader = std::function<std::optional<SourceFrame>(const SourceFrame*)>;
   double fps;
   Reader reader;
-  std::optional<SourceFrame> left;
-  std::optional<SourceFrame> right;
+  std::shared_ptr<SourceFrame> left;
+  std::shared_ptr<SourceFrame> right;
   bool eof = false;
   // Zero keeps the source-clock behavior used by existing callers.  When the
   // output clock is faster, source frames occupy their nearest output slots;
@@ -33,13 +34,24 @@ struct InterpolationWindow final {
     return static_cast<double>(slot / output);
   }
 
+  // Repeated render-clock slots spanning missing footage stay a hold.
+  // Allow 1 ns for subtraction rounding at the half-second boundary.
+  bool holdsGap() const {
+    if (!left || !right || right->index <= left->index) return false;
+    return timestamp(right->index) - timestamp(left->index) >= 0.5 - 1.0e-9;
+  }
+
   bool readOne() {
     if (eof) return false;
-    auto next = reader();
-    while (next && left && next->duplicateBefore && !next->cutBefore) next = reader();
+    // Keep the retained predecessor alive while the reader skips duplicates;
+    // exact-geometry input may borrow its RGB bytes without copying them.
+    const SourceFrame* previous = right ? &*right : (left ? &*left : nullptr);
+    auto next = reader(previous);
+    while (next && left && next->duplicateBefore && !next->cutBefore)
+      next = reader(previous);
     if (!next) { eof = true; return false; }
-    if (!left) left = std::move(next);
-    else right = std::move(next);
+    if (!left) left = std::make_shared<SourceFrame>(std::move(*next));
+    else right = std::make_shared<SourceFrame>(std::move(*next));
     return true;
   }
 

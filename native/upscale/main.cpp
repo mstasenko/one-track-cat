@@ -7,6 +7,7 @@
 #include "verified_kernel_files.hpp"
 #include "spatial_ranges.hpp"
 #include "interpolation_window.hpp"
+#include "frame_writer.hpp"
 
 #include <openvino/openvino.hpp>
 #include <openvino/runtime/intel_gpu/properties.hpp>
@@ -305,12 +306,9 @@ bool readFrame(std::istream& stream, std::vector<std::uint8_t>& frame) {
   return true;
 }
 
-upscale::RgbFrame copyFrame(const upscale::RgbFrame& frame) {
-  return {frame.width, frame.height, frame.pixels};
-}
-
-upscale::RgbFrame resizeRgb(const upscale::RgbFrame& source, int outputWidth, int outputHeight) {
-  if (source.width == outputWidth && source.height == outputHeight) return copyFrame(source);
+// Take ownership so unchanged geometry can pass through without a second RGB copy.
+upscale::RgbFrame resizeRgb(upscale::RgbFrame source, int outputWidth, int outputHeight) {
+  if (source.width == outputWidth && source.height == outputHeight) return source;
   upscale::RgbFrame result{
       outputWidth, outputHeight,
       std::vector<std::uint8_t>(static_cast<std::size_t>(outputWidth) *
@@ -685,7 +683,10 @@ class RifeRuntime final {
     while (nextCandidate_ < candidates_.size() && stopRequested == 0) {
       const auto candidate = candidates_[nextCandidate_++];
       try {
-        session_ = std::make_unique<RifeSession>(core_, model_->clone(), candidate, width, height, assets_);
+        auto candidateSession = std::make_unique<RifeSession>(core_, model_->clone(), candidate,
+                                                              width, height, assets_);
+        reportDevice(diagnostics_, core_, "rife", candidate);
+        session_ = std::move(candidateSession);
         return true;
       } catch (const std::exception& error) {
         diagnostics_ << "otc-upscale: rife-device=" << candidate
@@ -702,7 +703,6 @@ class RifeRuntime final {
   upscale::RgbFrame infer(const upscale::RgbFrame& first, const upscale::RgbFrame& second, float timestep) {
     if (!session_ && !activate(first.width, first.height))
       throw std::runtime_error("could not compile RIFE on any requested device");
-    reportDevice(diagnostics_, core_, "rife", candidates_.at(nextCandidate_ - 1U));
     return session_->infer(first, second, timestep);
   }
 
@@ -731,13 +731,17 @@ struct InputReader final {
   std::vector<std::uint8_t> previousOriginal{};
   std::size_t interpolationRange = 0;
 
-  std::optional<SourceFrame> next(bool upscaleSpatial) {
+  std::optional<SourceFrame> next(bool upscaleSpatial,
+                                  const upscale::RgbFrame* previousFrame = nullptr) {
     if (readCount >= requiredFrames || stopRequested != 0) return std::nullopt;
     upscale::RgbFrame original{
         options.width, options.height,
         std::vector<std::uint8_t>(checkedFrameBytes(options.width, options.height,
                                                     "source dimensions"))};
-    if (!readFrame(std::cin, original.pixels)) return std::nullopt;
+    if (!readFrame(std::cin, original.pixels)) {
+      if (stopRequested != 0) return std::nullopt;
+      throw std::runtime_error("source ended before the requested duration");
+    }
     const auto sample = sceneSample(original);
     double difference = 0.0;
     for (std::size_t index = 0U; index < previousSample.size(); ++index)
@@ -751,10 +755,16 @@ struct InputReader final {
            index >= options.interpolationRanges[interpolationRange].second) ++interpolationRange;
     const bool fillDuplicates = interpolationRange < options.interpolationRanges.size() &&
                                index >= options.interpolationRanges[interpolationRange].first;
-    const bool duplicate = fillDuplicates && index > options.interpolationRanges[interpolationRange].first &&
-                           !cut && previousOriginal == original.pixels;
-    if (fillDuplicates) previousOriginal = original.pixels;
-    else previousOriginal.clear();
+    // Without Flash or resizing, the window's retained predecessor owns the
+    // exact raw RGB bytes and remains alive until this reader call returns.
+    const bool borrowPrevious = previousFrame != nullptr && !upscaleSpatial && options.width == options.outputWidth &&
+                                options.height == options.outputHeight;
+    const bool identicalPrevious = borrowPrevious && identicalFrames(*previousFrame, original);
+    const bool duplicate =
+        fillDuplicates && index > options.interpolationRanges[interpolationRange].first &&
+        !cut && (borrowPrevious ? identicalPrevious : previousOriginal == original.pixels);
+    if (borrowPrevious || !fillDuplicates) previousOriginal.clear();
+    else previousOriginal = original.pixels;
     upscale::RgbFrame prepared;
     if (upscaleSpatial) {
       // Flash graphs remain landscape. Rotate only the spatial input; scene
@@ -762,10 +772,10 @@ struct InputReader final {
       auto landscape = isPortraitFlashTarget(options.outputWidth, options.outputHeight)
                            ? rotateRgb90(original, Rotation90::clockwise)
                            : std::move(original);
-      prepared = resizeRgb(landscape, static_cast<int>(kFlashWidth),
+      prepared = resizeRgb(std::move(landscape), static_cast<int>(kFlashWidth),
                            static_cast<int>(kFlashHeight));
     } else {
-      prepared = resizeRgb(original, options.outputWidth, options.outputHeight);
+      prepared = resizeRgb(std::move(original), options.outputWidth, options.outputHeight);
     }
     return SourceFrame{index, std::move(prepared), cut, duplicate};
   }
@@ -781,14 +791,18 @@ bool mayRetryRife(const Options& options) {
   return stopRequested == 0 && options.device == "AUTO";
 }
 
-upscale::RgbFrame processBaseFrame(const upscale::RgbFrame& first, const upscale::RgbFrame& second,
-                              double alpha, bool allowRife, RifeRuntime* rife) {
+const upscale::RgbFrame* processBaseFrame(const upscale::RgbFrame& first,
+                                           const upscale::RgbFrame& second, double alpha,
+                                           bool allowRife, RifeRuntime* rife,
+                                           upscale::RgbFrame& generated) {
   if (alpha <= kTimeEpsilon || alpha >= 1.0 - kTimeEpsilon || !allowRife)
     // Keep exact half-frame ties stable despite timestamp subtraction roundoff.
-    return copyFrame(alpha < 0.5 - kTimeEpsilon ? first : second);
+    return alpha < 0.5 - kTimeEpsilon ? &first : &second;
   if (!rife) throw std::runtime_error("RIFE runtime is unavailable");
-  if (identicalFrames(first, second)) return copyFrame(first);
-  return rife->infer(first, second, static_cast<float>(alpha));
+  if (identicalFrames(first, second)) return &first;
+  // The caller writes the selected frame before advancing the two-frame window.
+  generated = rife->infer(first, second, static_cast<float>(alpha));
+  return &generated;
 }
 
 class ProgressReporter final {
@@ -841,6 +855,8 @@ int main(int argc, char** argv) {
 
     std::ios::sync_with_stdio(false);
     std::cin.tie(nullptr);
+    // Diagnostics must not flush the binary stream owned by the writer thread.
+    std::cerr.tie(nullptr);
     std::cerr << "otc-upscale: starting\n";
     if (clockOptions.fps != options.fps)
       std::cerr << "otc-upscale: interpolation-fps=" << clockOptions.fps << '\n';
@@ -905,25 +921,31 @@ int main(int argc, char** argv) {
 
     InterpolationWindow window{
         clockOptions.fps,
-        [&, needFlash]() -> std::optional<SourceFrame> {
+        [&, needFlash](const SourceFrame* previous) -> std::optional<SourceFrame> {
           if (needFlash) return spatial->next();
-          return input->next(false);
+          return input->next(false, previous == nullptr ? nullptr : &previous->frame);
         },
-        std::nullopt, std::nullopt, false, options.outputFps};
+        {}, {}, false, options.outputFps};
     if (!window.initialize()) {
       if (stopRequested != 0) return 0;
       throw std::runtime_error("source ended before the requested duration");
     }
 
+    FrameWriter writer([](const RgbFrame& frame) {
+      std::cout.write(reinterpret_cast<const char*>(frame.pixels.data()),
+                      static_cast<std::streamsize>(frame.pixels.size()));
+      if (!std::cout) throw std::runtime_error("output pipe closed");
+    }, [] { return stopRequested != 0; });
     for (std::uint64_t outputIndex = 0U;
          outputIndex < outputFrames && stopRequested == 0; ++outputIndex) {
       const double timestamp = static_cast<double>(outputIndex) / options.outputFps;
       window.ensureRight(timestamp);
       if (!window.left) throw std::runtime_error("source frame window is empty");
 
-      RgbFrame output;
+      RgbFrame generated;
+      const RgbFrame* outputFrame = nullptr;
       if (!window.right) {
-        output = copyFrame(window.left->frame);
+        outputFrame = &window.left->frame;
       } else {
         const double leftTime = window.timestamp(window.left->index);
         const double rightTime = window.timestamp(window.right->index);
@@ -931,13 +953,15 @@ int main(int argc, char** argv) {
         double alpha = interval > 0.0
                                  ? std::clamp((timestamp - leftTime) / interval, 0.0, 1.0)
                                  : 0.0;
-        // A skipped duplicate run must not move the following scene cut early.
-        if (window.right->cutBefore && timestamp < rightTime - kTimeEpsilon) alpha = 0.0;
-        const bool allowRife = needRife && !window.right->cutBefore;
+        // Missing footage cannot be reconstructed as a multi-second morph.
+        // Preserve the recorded hold until the next real frame arrives.
+        const bool hold = window.right->cutBefore || window.holdsGap();
+        if (hold && timestamp < rightTime - kTimeEpsilon) alpha = 0.0;
+        const bool allowRife = needRife && !hold;
         while (true) {
           try {
-            output = processBaseFrame(window.left->frame, window.right->frame, alpha,
-                                      allowRife, rife.get());
+            outputFrame = processBaseFrame(window.left->frame, window.right->frame, alpha,
+                                           allowRife, rife.get(), generated);
             break;
           } catch (const std::exception& error) {
             if (!rife || !mayRetryRife(options)) throw;
@@ -948,19 +972,28 @@ int main(int argc, char** argv) {
         }
       }
 
+      // Alias retained source frames so the bounded writer can overlap encoding
+      // with inference without copying RGB bytes or outliving their owner.
+      std::shared_ptr<const RgbFrame> output;
+      if (outputFrame == &generated) output = std::make_shared<RgbFrame>(std::move(generated));
+      else {
+        const auto& owner = outputFrame == &window.left->frame ? window.left : window.right;
+        output = {owner, outputFrame};
+      }
       if (needFlash && isPortraitFlashTarget(options.outputWidth, options.outputHeight))
-        output = rotateRgb90(output, Rotation90::counterClockwise);
+        output = std::make_shared<RgbFrame>(rotateRgb90(*output, Rotation90::counterClockwise));
 
-      if (output.width != options.outputWidth || output.height != options.outputHeight ||
-          output.pixels.size() != checkedFrameBytes(options.outputWidth, options.outputHeight,
-                                                    "output dimensions"))
+      if (output->width != options.outputWidth || output->height != options.outputHeight ||
+          output->pixels.size() != checkedFrameBytes(options.outputWidth, options.outputHeight,
+                                                     "output dimensions"))
         throw std::runtime_error("output frame geometry differs from the requested contract");
-      std::cout.write(reinterpret_cast<const char*>(output.pixels.data()),
-                      static_cast<std::streamsize>(output.pixels.size()));
-      if (!std::cout) throw std::runtime_error("output pipe closed");
+      if (!writer.enqueue(std::move(output))) return 0;
     }
 
     if (stopRequested != 0) return 0;
+    writer.finish();
+    std::cout.flush();
+    if (!std::cout) throw std::runtime_error("output pipe closed");
     // The output clock may be slower than the source clock.  Consume the
     // remainder of the bounded source timeline before checking truncation;
     // this does not rewind Flash state and keeps drain/partial-frame behavior

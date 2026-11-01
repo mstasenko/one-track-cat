@@ -1,5 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
-import type { Readable } from 'node:stream'
+import { PassThrough, type Readable } from 'node:stream'
 import { BrowserWindow } from 'electron'
 import type { HardwareLabel, JobPhase, JobProgress } from '../types'
 import { estimateEtaSeconds, ffmpegProgress } from './progress'
@@ -152,7 +152,6 @@ export async function runFacePipeline(
   const defaultPhase = options.phase ?? (encodingContext ? 'encoding' : phaseForLabel(label))
   const processingPhase = upscaling ? 'upscaling' : encodingContext ? 'encoding' : 'masking'
   const initialPhase = hasElevated ? 'preparing' : defaultPhase
-  const pipelineStartedAt = Date.now()
   const pipeline = new Promise<void>((resolve, reject) => {
     const children: (ChildProcessWithoutNullStreams | undefined)[] = []
     let failure: Error | undefined
@@ -177,9 +176,10 @@ export async function runFacePipeline(
     let reportedPreparationProgress = false
     let hardwareLabel = options.hardwareLabel
     let encodingHardwareLabel = options.encodingHardwareLabel
+    let upscaleInputBuffer: PassThrough | undefined
     let upscaleLabel = 'Upscaling video'
     let phase = initialPhase
-    let phaseStartedAt = pipelineStartedAt
+    let phaseStartedAt = Date.now()
     let phaseStartProgress = 0
     const preparationStart = Number.isFinite(options.preparationStart) ? options.preparationStart : undefined
     const preparationEnd = Number.isFinite(options.preparationEnd) ? options.preparationEnd : undefined
@@ -266,6 +266,14 @@ export async function runFacePipeline(
       preparationCarry = ''
       discardPreparationLine = false
     }
+    const cleanupUpscaleInputBuffer = (): void => {
+      const buffer = upscaleInputBuffer
+      if (!buffer) return
+      children[0]?.stdout.unpipe(buffer)
+      buffer.unpipe()
+      buffer.destroy()
+      upscaleInputBuffer = undefined
+    }
     const reportWorkerLine = (line: string): void => {
       const upscaleProgress = upscaling ? upscaleProgressMarker.exec(line) : null
       if (upscaleProgress) {
@@ -329,6 +337,7 @@ export async function runFacePipeline(
     const finish = (): void => {
       if (remaining > 0 || settled || finishStarted) return
       finishStarted = true
+      cleanupUpscaleInputBuffer()
       void (stderrCapture ?? Promise.resolve()).then(() => {
         if (settled) return
         settled = true
@@ -351,6 +360,8 @@ export async function runFacePipeline(
     const stop = (): void => {
       if (stopping || settled) return
       stopping = true
+      // Drop queued input before cooperative GPU EOF, even when the relay is full.
+      cleanupUpscaleInputBuffer()
       for (let index = 0; index < children.length - 1; index += 1) {
         const source = children[index]
         const destination = children[index + 1]
@@ -442,15 +453,19 @@ export async function runFacePipeline(
       return
     }
     const connectedChildren = children as ChildProcessWithoutNullStreams[]
-    const decoder = requiredChild(connectedChildren, 0)
-    decoder.stdin.end()
+    requiredChild(connectedChildren, 0).stdin.end()
     for (let index = 0; index < connectedChildren.length - 1; index += 1) {
-      requiredChild(connectedChildren, index).stdout.pipe(requiredChild(connectedChildren, index + 1).stdin)
+      const source = requiredChild(connectedChildren, index)
+      const destination = requiredChild(connectedChildren, index + 1)
+      if (upscaling && index === 0) {
+        // One UHD RGB frame is ~24 MiB; keep decoder prefetch bounded.
+        upscaleInputBuffer = new PassThrough({ highWaterMark: 32 * 1024 ** 2 })
+        source.stdout.pipe(upscaleInputBuffer).pipe(destination.stdin)
+      } else source.stdout.pipe(destination.stdin)
     }
     let progressBuffer = ''
-    const progressChild = requiredChild(connectedChildren, connectedChildren.length - 1)
-    progressChild.stdout.setEncoding('utf8')
-    progressChild.stdout.on('data', (chunk: string) => {
+    const progressStream = requiredChild(connectedChildren, connectedChildren.length - 1).stdout.setEncoding('utf8')
+    progressStream.on('data', (chunk: string) => {
       const lines = `${progressBuffer}${chunk}`.split(/\r?\n/)
       progressBuffer = (lines.pop() ?? '').slice(-1000)
       for (const line of lines) {

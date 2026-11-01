@@ -21,6 +21,12 @@ struct Rendered final {
   bool inferred = false;
 };
 
+struct ReaderObservation final {
+  std::uint64_t previous = kNoSource;
+  std::uint64_t current = kNoSource;
+  bool duplicate = false;
+};
+
 std::size_t nearestSlot(std::uint64_t index, double inputFps, double outputFps) {
   const auto value = std::round(static_cast<long double>(index) *
                                 static_cast<long double>(outputFps) /
@@ -35,7 +41,7 @@ std::vector<Rendered> renderClock(double inputFps, double outputFps,
   std::size_t next = 0U;
   InterpolationWindow window{
       inputFps,
-      [&]() -> std::optional<SourceFrame> {
+      [&](const SourceFrame*) -> std::optional<SourceFrame> {
         if (next == frames.size()) return std::nullopt;
         return frames[next++];
       },
@@ -59,13 +65,15 @@ std::vector<Rendered> renderClock(double inputFps, double outputFps,
     double alpha = interval > 0.0
                        ? std::clamp((time - leftTime) / interval, 0.0, 1.0)
                        : 0.0;
-    if (window.right->cutBefore && time < rightTime - kEpsilon) alpha = 0.0;
+    const bool holdsGap = window.holdsGap();
+    if ((window.right->cutBefore || holdsGap) && time < rightTime - kEpsilon)
+      alpha = 0.0;
 
     // This mirrors processBaseFrame's two non-AI guards: cuts never blend,
     // and an explicit freeze has identical adjacent RGB frames.
     const bool identical = window.left->frame.pixels == window.right->frame.pixels;
     const bool inferred = alpha > kEpsilon && alpha < 1.0 - kEpsilon &&
-                          !window.right->cutBefore && !identical;
+                          !window.right->cutBefore && !holdsGap && !identical;
     if (inferred) result.push_back({kNoSource, true});
     else result.push_back({alpha < 0.5 - kEpsilon ? window.left->index : window.right->index,
                            false});
@@ -154,15 +162,132 @@ void checkDuplicateAndCutBoundaries() {
   assert(!freeze[1].inferred);
 }
 
+void checkLongDuplicateHoldGuard() {
+  std::vector<SourceFrame> held{
+      {0, {1, 1, {0}}, false, false}};
+  for (std::uint64_t index = 1U; index < 158U; ++index)
+    held.push_back({index, {1, 1, {0}}, false, true});
+  held.push_back({158, {1, 1, {255}}, false, false});
+  const auto preserved = renderClock(60.0, 60.0, held, 159U);
+  for (std::size_t slot = 0U; slot < 158U; ++slot)
+    assert(preserved[slot].source == 0U && !preserved[slot].inferred);
+  assert(preserved[158].source == 158U && !preserved[158].inferred);
+
+  // A long duplicate gap and a scene cut must both preserve the old frame
+  // until the cut endpoint's exact output slot.
+  held.back().cutBefore = true;
+  const auto heldCut = renderClock(60.0, 60.0, held, 159U);
+  for (std::size_t slot = 0U; slot < 158U; ++slot)
+    assert(heldCut[slot].source == 0U && !heldCut[slot].inferred);
+  assert(heldCut[158].source == 158U && !heldCut[158].inferred);
+
+  // A single skipped frame is still a normal interpolation request.
+  const std::vector<SourceFrame> oneHole{
+      {0, {1, 1, {0}}, false, false},
+      {1, {1, 1, {0}}, false, true},
+      {2, {1, 1, {255}}, false, false}};
+  const auto interpolated = renderClock(60.0, 60.0, oneHole, 3U);
+  assert(interpolated[0].source == 0U && !interpolated[0].inferred);
+  assert(interpolated[1].source == kNoSource && interpolated[1].inferred);
+  assert(interpolated[2].source == 2U && !interpolated[2].inferred);
+
+  // Sparse source footage follows the same limit without skipped indices.
+  const std::vector<SourceFrame> sparseFrames{
+      {0, {1, 1, {0}}, false, false},
+      {1, {1, 1, {255}}, false, false}};
+  const auto sparse = renderClock(1.0, 60.0, sparseFrames, 61U);
+  for (std::size_t slot = 0U; slot < 60U; ++slot)
+    assert(sparse[slot].source == 0U && !sparse[slot].inferred);
+  assert(sparse[60].source == 1U && !sparse[60].inferred);
+
+  // Only intervals strictly below half a second may synthesize frames.
+  for (const std::uint64_t endpoint : {29U, 30U, 31U}) {
+    std::vector<SourceFrame> boundary{{0, {1, 1, {0}}, false, false}};
+    for (std::uint64_t index = 1U; index < endpoint; ++index)
+      boundary.push_back({index, {1, 1, {0}}, false, true});
+    boundary.push_back({endpoint, {1, 1, {255}}, false, false});
+    const auto rendered = renderClock(60.0, 60.0, boundary, endpoint + 1U);
+    for (std::size_t slot = 1U; slot < endpoint; ++slot) {
+      if (endpoint < 30U)
+        assert(rendered[slot].source == kNoSource && rendered[slot].inferred);
+      else
+        assert(rendered[slot].source == 0U && !rendered[slot].inferred);
+    }
+    assert(rendered[endpoint].source == endpoint && !rendered[endpoint].inferred);
+  }
+}
+
 void checkSourceClockFallback() {
   InterpolationWindow window{
       30.0,
-      []() -> std::optional<SourceFrame> { return SourceFrame{0, {1, 1, {1}}, false, false}; },
+      [](const SourceFrame*) -> std::optional<SourceFrame> {
+        return SourceFrame{0, {1, 1, {1}}, false, false};
+      },
       {}, {}, false};
   assert(window.timestamp(1U) == 1.0 / 30.0);
   window.outputFps = 60.0;
   assert(window.timestamp(1U) == 2.0 / 60.0);
   assert(window.timestamp(2U) == 4.0 / 60.0);
+}
+
+void checkBorrowedPreviousAcrossDuplicateSkips() {
+  // The reader derives duplicateBefore from the borrowed retained frame. The
+  // range ends at frame 4, and a cut at frame 2 must not inherit the old
+  // scene's duplicate decision.
+  const std::vector<SourceFrame> source{
+      {0, {1, 1, {10}}, false, false},
+      {1, {1, 1, {10}}, false, false},
+      {2, {1, 1, {20}}, true, false},
+      {3, {1, 1, {20}}, false, false},
+      {4, {1, 1, {20}}, false, false},
+      {5, {1, 1, {30}}, false, false}};
+  std::size_t next = 0U;
+  std::vector<ReaderObservation> observations;
+  InterpolationWindow window{
+      50.0,
+      [&](const SourceFrame* previous) -> std::optional<SourceFrame> {
+        if (next == source.size()) return std::nullopt;
+        auto frame = source[next++];
+        const bool inInterpolationRange = frame.index >= 1U && frame.index < 4U;
+        frame.duplicateBefore = inInterpolationRange && previous != nullptr &&
+            !frame.cutBefore && frame.frame.pixels == previous->frame.pixels;
+        observations.push_back({previous ? previous->index : kNoSource,
+                                frame.index, frame.duplicateBefore});
+        return frame;
+      },
+      {}, {}, false, 60.0};
+
+  assert(window.initialize());
+  assert(window.left && window.left->index == 0U);
+  window.ensureRight(0.0);
+  assert(window.left && window.left->index == 0U);
+  assert(window.right && window.right->index == 2U);
+
+  // Exercise the right-predecessor path explicitly. Frame 3 matches frame 2
+  // but not frame 0, so using left here would fail the duplicate decision.
+  assert(window.readOne());
+  assert(window.left && window.left->index == 0U);
+  assert(window.right && window.right->index == 4U);
+
+  // Advance across the post-cut duplicate and the interpolation-range end.
+  window.ensureRight(6.0 / 60.0);
+  assert(window.left && window.left->index == 4U);
+  assert(window.right && window.right->index == 5U);
+  assert(observations.size() == 6U);
+  assert(observations[0].previous == kNoSource && observations[0].current == 0U &&
+         !observations[0].duplicate);
+  assert(observations[1].previous == 0U && observations[1].current == 1U &&
+         observations[1].duplicate);
+  // The retained predecessor stays borrowed while duplicate candidates are
+  // skipped; the skipped candidate itself must not become a dangling input.
+  assert(observations[2].previous == 0U && observations[2].current == 2U &&
+         !observations[2].duplicate);
+  assert(observations[3].previous == 2U && observations[3].current == 3U &&
+         observations[3].duplicate);
+  assert(observations[4].previous == 2U && observations[4].current == 4U &&
+         !observations[4].duplicate);
+  assert(observations[5].previous == 4U && observations[5].current == 5U &&
+         !observations[5].duplicate);
 }
 
 }  // namespace
@@ -173,5 +298,7 @@ int main() {
   for (const auto fps : {50.426654053916, 50.0, 24.0, 30.0, 59.94})
     checkNearestOutputSlots(fps);
   checkDuplicateAndCutBoundaries();
+  checkLongDuplicateHoldGuard();
   checkSourceClockFallback();
+  checkBorrowedPreviousAcrossDuplicateSkips();
 }

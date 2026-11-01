@@ -20,6 +20,7 @@ video without an account or an upload.
 - For Shorts, use the arrows above the timeline to set the frame position at the playhead. The frame moves smoothly between these points; click a diamond to return to one.
 - Blur, pixelate, or mask faces with the optional local face pack.
 - Upscale video to 4K and create smoother 60 fps motion with the optional Upscale pack.
+  Smoothing fills gaps shorter than half a second; longer pauses stay as recorded.
 - Recreate your own narration with clearer wording and your voice using the optional voice pack.
 - Undo and redo your editing.
 

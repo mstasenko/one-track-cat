@@ -11,7 +11,7 @@ class FakeStream extends EventEmitter {
   readonly end = vi.fn()
   readonly resume = vi.fn()
   readonly unpipe = vi.fn()
-  setEncoding(): void { return undefined }
+  setEncoding(): this { return this }
   pipe<T>(destination: T): T { return destination }
 }
 
