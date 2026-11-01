@@ -1,8 +1,13 @@
 #pragma once
 
 #include <openvino/openvino.hpp>
+#include <openvino/op/result.hpp>
 #include <openvino/opsets/opset13.hpp>
+#include <cmath>
+#include <cstdint>
+#include <limits>
 #include <stdexcept>
+#include <vector>
 
 namespace otc::upscale {
 
@@ -52,6 +57,80 @@ inline std::shared_ptr<ov::Model> rifeGpuModel(std::shared_ptr<ov::Model> model,
   auto packed = std::make_shared<Concat>(ov::OutputVector{planes(first), planes(second), time}, 1);
   model->get_parameters().at(0)->output(0).replace(packed->output(0));
   return std::make_shared<ov::Model>(model->outputs(), ov::ParameterVector{first, second, step});
+}
+
+// Keep byte conversion on the device while matching the worker's double-based
+// clamp/round/truncate contract.  The threshold table corrects f32 multiply
+// and add rounding at the half-byte boundaries.
+inline std::shared_ptr<ov::Model> rifeGpuOutputModel(std::shared_ptr<ov::Model> model,
+                                                    int width, int height) {
+  using namespace ov::opset13;
+  if (!model || model->outputs().size() != 1U)
+    throw std::invalid_argument("RIFE GPU output model requires one result");
+  if (width <= 0 || height <= 0)
+    throw std::invalid_argument("RIFE GPU output crop dimensions must be positive");
+  const auto sourceResult = std::dynamic_pointer_cast<ov::op::v0::Result>(
+      model->output(0U).get_node_shared_ptr());
+  const auto source = sourceResult ? sourceResult->input_value(0U) : model->output(0U);
+  const auto sourceShape = source.get_partial_shape();
+  if (source.get_element_type() != ov::element::f32 || sourceShape.rank().is_dynamic() ||
+      sourceShape.rank().get_length() != 4)
+    throw std::invalid_argument("RIFE GPU output must be static-rank FP32 NCHW");
+  if ((sourceShape[2].is_static() && sourceShape[2].get_length() < height) ||
+      (sourceShape[3].is_static() && sourceShape[3].get_length() < width))
+    throw std::invalid_argument("RIFE GPU output is smaller than the requested crop");
+
+  // Match the CPU path's top-left crop before checking finiteness or
+  // converting bytes; invalid padded pixels must not poison the visible frame.
+  const auto cropped = std::make_shared<Slice>(
+      source,
+      Constant::create(ov::element::i64, {2}, {0, 0}),
+      Constant::create(ov::element::i64, {2}, {height, width}),
+      Constant::create(ov::element::i64, {2}, {1, 1}),
+      Constant::create(ov::element::i64, {2}, {2, 3}));
+
+  // IsFinite rejects subnormals in the pinned CPU plugin; this comparison
+  // accepts them while still rejecting NaN and infinity.
+  const auto finite = std::make_shared<LessEqual>(std::make_shared<Abs>(cropped),
+      Constant::create(ov::element::f32, {}, {std::numeric_limits<float>::max()}));
+  const auto zero = Constant::create(ov::element::f32, {}, {0.0F});
+  const auto one = Constant::create(ov::element::f32, {}, {1.0F});
+  const auto clean = std::make_shared<Minimum>(
+      std::make_shared<Maximum>(std::make_shared<Select>(finite, cropped, zero), zero), one);
+  const auto rounded = std::make_shared<Floor>(std::make_shared<Add>(
+      std::make_shared<Multiply>(clean,
+                                 Constant::create(ov::element::f32, {}, {255.0F})),
+      Constant::create(ov::element::f32, {}, {0.5F})));
+  const auto quantized = std::make_shared<Convert>(rounded, ov::element::i32);
+
+  std::vector<float> thresholds(256U, 0.0F);
+  for (std::size_t value = 1U; value < thresholds.size(); ++value) {
+    const double boundary = (static_cast<double>(value) - 0.5) / 255.0;
+    auto threshold = static_cast<float>(boundary);
+    if (static_cast<double>(threshold) < boundary)
+      threshold = std::nextafter(threshold, std::numeric_limits<float>::infinity());
+    thresholds[value] = threshold;
+  }
+  const auto thresholdAtQuantized = std::make_shared<Gather>(
+      Constant::create(ov::element::f32, {thresholds.size()}, thresholds), quantized,
+      Constant::create(ov::element::i64, {}, {0}));
+  const auto corrected = std::make_shared<Subtract>(
+      quantized, std::make_shared<Convert>(
+                     std::make_shared<Less>(clean, thresholdAtQuantized),
+                     ov::element::i32));
+  const auto nhwc = std::make_shared<Transpose>(
+      std::make_shared<Convert>(corrected, ov::element::u8),
+      Constant::create(ov::element::i64, {4}, {0, 2, 3, 1}));
+  auto output = std::make_shared<Result>(nhwc);
+  // Reduce independent rows, not the whole UHD image into one serial GPU reduction.
+  auto finiteOutput = std::make_shared<Result>(std::make_shared<ReduceLogicalAnd>(
+      finite, Constant::create(ov::element::i64, {1}, {3}), false));
+  output->set_friendly_name("rife_u8_output");
+  finiteOutput->set_friendly_name("finite_mask");
+  output->output(0).get_tensor().set_names({"rife_u8_output"});
+  finiteOutput->output(0).get_tensor().set_names({"finite_mask"});
+  return std::make_shared<ov::Model>(ov::ResultVector{output, finiteOutput},
+                                     model->get_parameters(), "rife_gpu_output");
 }
 
 }  // namespace otc::upscale

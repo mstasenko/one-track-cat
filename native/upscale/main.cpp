@@ -18,6 +18,7 @@
 #include <csignal>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <exception>
 #include <filesystem>
 #include <functional>
@@ -432,7 +433,8 @@ class RifeSession final {
     if (gpuFast_) {
       kernels_.emplace(VerifiedKernelFiles::open(assets, {kRifeWarpConfig,
           {VerifiedKernelSourceSpec{kRifeWarpSource, 1U}, {}}, 1U}));
-      model = rifeGpuModel(std::move(model), sourceWidth, sourceHeight);
+      model = rifeGpuOutputModel(rifeGpuModel(std::move(model), sourceWidth, sourceHeight),
+                                 sourceWidth, sourceHeight);
     }
 #endif
     model_ = std::move(model);
@@ -483,6 +485,19 @@ class RifeSession final {
     request_->infer();
     const auto output = request_->get_output_tensor(0U);
     const auto outputShape = output.get_shape();
+    if (gpuFast_) {
+      const auto finite = request_->get_output_tensor(1U);
+      if (finite.get_element_type() != ov::element::boolean ||
+          finite.get_shape() != ov::Shape{1U, 3U, static_cast<std::size_t>(first.height)} ||
+          std::memchr(finite.data<const char>(), 0, finite.get_size()) != nullptr)
+        throw std::runtime_error("RIFE output contains a non-finite value");
+      if (output.get_element_type() != ov::element::u8 ||
+          outputShape != ov::Shape{1U, static_cast<std::size_t>(first.height),
+                                  static_cast<std::size_t>(first.width), 3U})
+        throw std::runtime_error("RIFE byte output does not preserve RGB dimensions");
+      const auto* bytes = output.data<const std::uint8_t>();
+      return {first.width, first.height, {bytes, bytes + output.get_size()}};
+    }
     if (outputShape.size() != 4U || outputShape[0] != 1U || outputShape[1] != 3U ||
         outputShape[2] < static_cast<std::size_t>(first.height) ||
         outputShape[3] < static_cast<std::size_t>(first.width))
