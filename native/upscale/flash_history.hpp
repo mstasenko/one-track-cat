@@ -104,7 +104,8 @@ class FlashHistoryView final {
 // One layer's bounded disk-backed BF16 K/V owner.  It deliberately does not
 // own a 30-layer map: the controller keeps one persistent owner per layer
 // across calls and touches only the currently active pair.  flush() writes
-// and advises the active mapping away while retaining the owner; retire() is a
+// and drops the active mapping's PTEs while retaining the owner. Clean file
+// pages remain reclaimable by the OS. retire() is a
 // terminal operation after the final call, not a per-layer-boundary operation.
 // Current updates are exactly two spatial windows; only the mode-selected
 // retained suffix is copied into the owned files and pooled prefix.
@@ -120,7 +121,8 @@ class FlashHistoryOwner final {
   ~FlashHistoryOwner() noexcept;
 
   // Copy the finite current pair, retain its exact temporal suffix, and
-  // synchronously persist both owned files before making the new view visible.
+  // publish its mapped bytes before making the new view visible. Explicit
+  // flush() forces persistence; updates release mapping pages for normal OS writeback.
   // Pooled F32 has shape [12,current_windows,128].
   std::vector<float> update(const std::uint16_t* current_k,
                             const std::uint16_t* current_v,
@@ -132,6 +134,7 @@ class FlashHistoryOwner final {
   // A view must be destroyed before the next update or retirement.  This
   // prevents a GPU upload from observing a file while its slots are rotated.
   FlashHistoryView view() const;
+
 
   // Re-sync an already committed pair.  This is useful before a phase switch
   // or asynchronous prefetch, and rejects live views to keep lifetime explicit.
@@ -151,7 +154,8 @@ class FlashHistoryOwner final {
 
   void validate_files() const;
   void validate_directory() const;
-  void synchronize();
+  void synchronize(bool force = true);
+  bool mapping_ranges_overlap(const void* pointer, std::size_t bytes) const;
   bool has_live_view() const noexcept;
   void ensure_open() const;
   void remove_owned_entries_noexcept() noexcept;
@@ -166,6 +170,7 @@ class FlashHistoryOwner final {
   std::size_t pooled_capacity_elements_ = 0U;
   std::size_t pooled_head_stride_elements_ = 0U;
   std::uint64_t disk_reserve_bytes_;
+  std::size_t ring_start_windows_ = 0U;
   // Ownership is captured from the opened parent/worker at construction.  A
   // root worker may give only the private leaf back to the parent owner so a
   // normal user can remove an orphaned leaf; the mapped K/V files remain

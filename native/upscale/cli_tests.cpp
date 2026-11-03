@@ -1,4 +1,6 @@
 #include <cassert>
+#include <fstream>
+#include <unistd.h>
 #include <chrono>
 #include <filesystem>
 #include <iostream>
@@ -478,6 +480,46 @@ int main() {
          truncated.output.size() < rgb.size());
   const auto partial = runPassthrough(rgb.substr(0, 13));
   assert(partial.exit == 1 && partial.errors.find("partial RGB24") != std::string::npos);
+
+  // Hoisting horizontal coordinates must preserve the established bilinear
+  // resize byte for byte, including clamped edges and non-integer ratios.
+  for (const auto dimensions : {std::array<int, 4>{7, 5, 13, 9},
+                               std::array<int, 4>{13, 9, 7, 5},
+                               std::array<int, 4>{1, 2, 9, 7}}) {
+    const auto [sw, sh, dw, dh] = dimensions;
+    otc::upscale::RgbFrame frame{sw, sh, std::vector<std::uint8_t>(sw * sh * 3)};
+    for (std::size_t i = 0; i < frame.pixels.size(); ++i) frame.pixels[i] = (i * 37 + 19) % 256;
+    std::vector<std::uint8_t> expected(dw * dh * 3);
+    for (int y = 0; y < dh; ++y) for (int x = 0; x < dw; ++x) {
+      const double sy = (static_cast<double>(y) + 0.5) * sh / static_cast<double>(dh) - 0.5;
+      const double sx = (static_cast<double>(x) + 0.5) * sw / static_cast<double>(dw) - 0.5;
+      const int y0 = std::clamp(static_cast<int>(std::floor(sy)), 0, sh - 1);
+      const int x0 = std::clamp(static_cast<int>(std::floor(sx)), 0, sw - 1);
+      const int y1 = std::clamp(y0 + 1, 0, sh - 1), x1 = std::clamp(x0 + 1, 0, sw - 1);
+      const double fy = std::clamp(sy - y0, 0.0, 1.0), fx = std::clamp(sx - x0, 0.0, 1.0);
+      for (int c = 0; c < 3; ++c) {
+        const double top = frame.pixels[(y0 * sw + x0) * 3 + c] * (1 - fx) + frame.pixels[(y0 * sw + x1) * 3 + c] * fx;
+        const double bottom = frame.pixels[(y1 * sw + x0) * 3 + c] * (1 - fx) + frame.pixels[(y1 * sw + x1) * 3 + c] * fx;
+        expected[(y * dw + x) * 3 + c] = std::clamp(std::lround(top * (1 - fy) + bottom * fy), 0L, 255L);
+      }
+    }
+    assert(otc::upscale::resizeRgb(frame, dw, dh).pixels == expected);
+  }
+
+  // Cancellation is observable between GPU requests, without reading stdin
+  // or constructing a device. A missing marker must not cancel ordinary work.
+  const auto marker = std::filesystem::temp_directory_path() /
+      ("otc-upscale-cancel-" + std::to_string(::getpid()));
+  std::filesystem::remove(marker);
+  otc::upscale::stopRequested = 0;
+  assert(!otc::upscale::cancellationRequested(marker));
+  { std::ofstream file(marker); file << "cancel"; }
+  bool cancelled = false;
+  try { otc::upscale::checkCancellation(marker); }
+  catch (const std::runtime_error&) { cancelled = true; }
+  assert(cancelled && otc::upscale::stopRequested != 0);
+  std::filesystem::remove(marker);
+  otc::upscale::stopRequested = 0;
 
   checkRifeReshapeAndResume();
 

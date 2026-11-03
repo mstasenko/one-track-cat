@@ -1,6 +1,7 @@
 #include "flash_history.hpp"
 
 #include <cassert>
+#include <cstring>
 #include <cerrno>
 #include <csignal>
 #include <cstdint>
@@ -8,6 +9,7 @@
 #include <fstream>
 #include <iostream>
 #include <limits>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <system_error>
@@ -27,6 +29,8 @@ using otc::upscale::FlashMode;
 constexpr std::size_t kValuesPerWindow = 128U * 1536U;
 constexpr std::size_t kPooledHeads = 12U;
 constexpr std::size_t kPooledChannels = 128U;
+
+std::uint64_t rss_kib();
 
 std::filesystem::path scratch(const std::filesystem::path& root) {
   if (!std::filesystem::is_directory(root))
@@ -260,6 +264,80 @@ void test_retention_and_pooled_merge(const std::filesystem::path& root) {
   remove_fixture(terminal_parent);
 }
 
+void test_ring_callback_equivalence_and_released_pages(
+    const std::filesystem::path& root) {
+  const auto direct_parent = scratch(root);
+  const auto callback_parent = scratch(root);
+  {
+    const auto policy = otc::upscale::flashHistoryPolicy(FlashMode::base, 1U);
+    FlashHistoryOwner direct(direct_parent, policy, 1U, 0U);
+    FlashHistoryOwner callback(callback_parent, policy, 1U, 0U);
+    std::vector<std::uint16_t> expected_k;
+    std::vector<std::uint16_t> expected_v;
+    for (std::uint16_t seed = 0U; seed < 5U; ++seed) {
+      const auto k = current(2U, static_cast<std::uint16_t>(0x3F80U + seed * 0x0100U));
+      const auto v = current(2U, static_cast<std::uint16_t>(0x4000U + seed * 0x0100U));
+      const auto p = pooled(2U, 0.1F + static_cast<float>(seed));
+      const auto direct_merged = direct.update(k.data(), v.data(), 2U, p.data());
+      std::vector<float> callback_merged;
+      if (seed == 0U) {
+        callback_merged = callback.update(k.data(), v.data(), 2U, p.data());
+      } else {
+        callback_merged = callback.update(FlashHistoryUpdate{
+            nullptr, nullptr, 2U, p.data(),
+            [&](std::uint16_t* destination_k, std::uint16_t* destination_v,
+                std::size_t source_start, std::size_t count) {
+              assert(source_start <= 2U && count <= 2U);
+              std::memcpy(destination_k, k.data() + source_start * kValuesPerWindow,
+                          count * kValuesPerWindow * sizeof(std::uint16_t));
+              std::memcpy(destination_v, v.data() + source_start * kValuesPerWindow,
+                          count * kValuesPerWindow * sizeof(std::uint16_t));
+            },
+            false});
+      }
+      assert(callback_merged == direct_merged);
+      expected_k.insert(expected_k.end(), k.begin(), k.end());
+      expected_v.insert(expected_v.end(), v.begin(), v.end());
+      const std::size_t keep_windows = std::min<std::size_t>(3U, (seed + 1U) * 2U);
+      const std::size_t first_window = (seed + 1U) * 2U - keep_windows;
+      {
+        const auto direct_view = direct.view();
+        const auto callback_view = callback.view();
+        assert(direct_view.windows() == keep_windows);
+        assert(callback_view.windows() == keep_windows);
+        assert(std::memcmp(direct_view.k(), expected_k.data()
+                               + first_window * kValuesPerWindow,
+                           keep_windows * kValuesPerWindow * sizeof(std::uint16_t)) == 0);
+        assert(std::memcmp(direct_view.v(), expected_v.data()
+                               + first_window * kValuesPerWindow,
+                           keep_windows * kValuesPerWindow * sizeof(std::uint16_t)) == 0);
+        assert(std::memcmp(callback_view.k(), direct_view.k(),
+                           keep_windows * kValuesPerWindow * sizeof(std::uint16_t)) == 0);
+        assert(std::memcmp(callback_view.v(), direct_view.v(),
+                           keep_windows * kValuesPerWindow * sizeof(std::uint16_t)) == 0);
+      }
+    }
+  }
+  remove_fixture(direct_parent);
+  remove_fixture(callback_parent);
+
+  // Dropping both mapping aliases must leave RSS bounded after an update.
+  const auto rss_before = rss_kib();
+  const auto resident_parent = scratch(root);
+  {
+    const auto policy = otc::upscale::flashHistoryPolicy(FlashMode::base, 1U);
+    FlashHistoryOwner owner(resident_parent, policy, 32U, 0U);
+    auto k = current(64U, 0x3F80U);
+    auto v = current(64U, 0x4000U);
+    auto p = pooled(64U, 0.5F);
+    owner.update(k.data(), v.data(), 64U, p.data());
+    const auto rss_after = rss_kib();
+    assert(rss_before == 0U || rss_after == 0U
+           || rss_after < rss_before + 256U * 1024U);
+  }
+  remove_fixture(resident_parent);
+}
+
 void test_callback_failure_is_permanent(const std::filesystem::path& root) {
   const auto parent = scratch(root);
   {
@@ -312,9 +390,16 @@ void test_finite_stale_and_alias_guards(const std::filesystem::path& root) {
     p[0] = std::numeric_limits<float>::infinity();
     rejects([&] { owner.update(k.data(), v.data(), 2U, p.data()); });
     p[0] = 0.5F;
-    k[7] = 0x7F80U;
-    rejects([&] { owner.update(k.data(), v.data(), 2U, p.data()); });
-    k[7] = 0x3F80U;
+    for (const auto index : {std::size_t{0U}, std::size_t{7U}, k.size() - 1U}) {
+      for (const auto invalid : {0x7F80U, 0xFF80U, 0x7FC1U}) {
+        k[index] = static_cast<std::uint16_t>(invalid);
+        rejects([&] { owner.update(k.data(), v.data(), 2U, p.data()); });
+        k[index] = 0x3F80U;
+        v[index] = static_cast<std::uint16_t>(invalid);
+        rejects([&] { owner.update(k.data(), v.data(), 2U, p.data()); });
+        v[index] = 0x4000U;
+      }
+    }
     owner.update(k.data(), v.data(), 2U, p.data());
     const std::uint16_t* alias = nullptr;
     {
@@ -531,6 +616,7 @@ int main(int argc, char** argv) {
   test_policies(root);
   test_root_worker_leaf_owner_cleanup(root);
   test_retention_and_pooled_merge(root);
+  test_ring_callback_equivalence_and_released_pages(root);
   test_callback_failure_is_permanent(root);
   test_finite_stale_and_alias_guards(root);
   test_one_active_owner_rss_and_reserve_overflow(root);

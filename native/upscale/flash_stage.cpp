@@ -3,10 +3,21 @@
 
 #include <openvino/runtime/intel_gpu/remote_properties.hpp>
 #include <openvino/runtime/intel_gpu/properties.hpp>
+#if OTC_FLASH_EXECUTABLE_CACHE
+#include <openvino/pass/manager.hpp>
+#include <openvino/pass/serialize.hpp>
+#include <openssl/evp.h>
+#endif
 
 #include <algorithm>
+#include <array>
+#include <cctype>
+#include <fstream>
+#include <list>
 #include <limits>
+#include <mutex>
 #include <sstream>
+#include <string_view>
 #if defined(__linux__)
 #include <link.h>
 #endif
@@ -37,6 +48,205 @@ void requireCacheRuntime() {
 }
 #endif
 
+#if OTC_FLASH_EXECUTABLE_CACHE
+// Exported executable blobs are useful only for this process and exact
+// OpenCL context. Keep this cache deliberately small: it must not become a
+// second model/weight store or retain compiled GPU workspaces.
+constexpr std::size_t kFlashExecutableCacheMaxEntries = 256U;
+constexpr std::size_t kFlashExecutableCacheMaxBytes = 256U * 1024U * 1024U;
+constexpr std::size_t kFlashExecutableConfigMaxBytes = 8U * 1024U * 1024U;
+constexpr std::size_t kFlashExecutableSourceMaxBytes = 64U * 1024U * 1024U;
+
+using FlashExecutableBlob = std::shared_ptr<const std::string>;
+
+struct FlashExecutableCacheEntry final {
+  std::string key;
+  FlashExecutableBlob blob;
+};
+
+struct FlashExecutableCacheState final {
+  std::mutex mutex;
+  std::list<FlashExecutableCacheEntry> entries;
+  std::size_t bytes = 0U;
+};
+
+FlashExecutableCacheState& flashExecutableCache() {
+  static FlashExecutableCacheState cache;
+  return cache;
+}
+
+void appendCacheField(std::string& destination, std::string_view value) {
+  const auto size = static_cast<std::uint64_t>(value.size());
+  destination.append(reinterpret_cast<const char*>(&size), sizeof(size));
+  destination.append(value.data(), value.size());
+}
+
+std::string sha256Bytes(const void* data, std::size_t bytes, const char* label) {
+  std::array<unsigned char, EVP_MAX_MD_SIZE> digest{};
+  unsigned length = 0U;
+  const auto* input = static_cast<const unsigned char*>(data);
+  if (EVP_Digest(input, bytes, digest.data(), &length, EVP_sha256(), nullptr) != 1 ||
+      length != 32U)
+    throw std::runtime_error(std::string("Flash executable cache ") + label + " digest failed");
+  return std::string(reinterpret_cast<const char*>(digest.data()), length);
+}
+
+std::string readBoundedFile(const std::string& path, std::size_t maximum,
+                            const char* label) {
+  std::ifstream file(path, std::ios::binary);
+  if (!file) throw std::runtime_error(std::string("Flash executable cache ") + label + " cannot be read");
+  file.seekg(0, std::ios::end);
+  const auto extent = file.tellg();
+  if (extent < 0 || static_cast<std::uintmax_t>(extent) > maximum)
+    throw std::runtime_error(std::string("Flash executable cache ") + label + " exceeds its bound");
+  std::string contents(static_cast<std::size_t>(extent), '\0');
+  file.seekg(0, std::ios::beg);
+  if (!contents.empty() &&
+      !file.read(contents.data(), static_cast<std::streamsize>(contents.size())))
+    throw std::runtime_error(std::string("Flash executable cache ") + label + " read failed");
+  return contents;
+}
+
+std::string readKernelConfig(const std::string& path) {
+  auto contents = readBoundedFile(path, kFlashExecutableConfigMaxBytes, "CONFIG_FILE");
+
+  // VerifiedKernelFiles creates a fresh sealed CONFIG_FILE per controller and
+  // rewrites its source references to /proc/self/fd/<number>. Normalize the
+  // process-local number, but include the sealed source bytes in the identity;
+  // normalizing numbers alone could alias two different kernels.
+  constexpr std::string_view descriptor = "/proc/self/fd/";
+  std::string sourceIdentity;
+  std::size_t cursor = 0U;
+  while ((cursor = contents.find(descriptor, cursor)) != std::string::npos) {
+    auto digits = cursor + descriptor.size();
+    auto end = digits;
+    while (end < contents.size() &&
+           std::isdigit(static_cast<unsigned char>(contents[end])))
+      ++end;
+    if (end == digits)
+      throw std::runtime_error("Flash executable cache CONFIG_FILE has malformed fd reference");
+    const auto source = readBoundedFile(std::string(descriptor) +
+                                            contents.substr(digits, end - digits),
+                                        kFlashExecutableSourceMaxBytes,
+                                        "kernel source");
+    contents.replace(digits, end - digits, "#");
+    appendCacheField(sourceIdentity,
+                     sha256Bytes(source.data(), source.size(), "kernel source"));
+    cursor = digits + 1U;
+  }
+  contents.append(sourceIdentity);
+  return contents;
+}
+
+std::string compileConfigIdentity(const ov::AnyMap& config) {
+  std::string identity;
+  for (const auto& [name, value] : config) {
+    appendCacheField(identity, name);
+    appendCacheField(identity, value.type_info().name());
+    if (name == "CONFIG_FILE") {
+      if (!value.is<std::string>())
+        throw std::runtime_error("Flash executable cache CONFIG_FILE type differs");
+      const auto contents = readKernelConfig(value.as<std::string>());
+      appendCacheField(identity, std::filesystem::path(value.as<std::string>())
+          .filename().generic_string());
+      appendCacheField(identity, sha256Bytes(contents.data(), contents.size(), "kernel config"));
+      continue;
+    }
+    std::ostringstream rendered;
+    value.print(rendered);
+    appendCacheField(identity, rendered.str());
+  }
+  return sha256Bytes(identity.data(), identity.size(), "compile config");
+}
+
+std::string graphIdentity(const ov::Model& model) {
+  // StreamSerialize includes operation attributes and small Constants in
+  // addition to ports/topology. Learned banks are Parameters in the admitted
+  // graphs, so their contents never enter this identity or the cache blob.
+  auto copy = model.clone();
+  copy->set_friendly_name("stage");
+  // Generated operation names contain process-global counters. They have no
+  // execution meaning, but would otherwise prevent equivalent new controllers
+  // from reusing the same executable.
+  std::size_t index = 0;
+  for (const auto& node : copy->get_ordered_ops()) node->set_friendly_name("stage_" + std::to_string(index++));
+  std::ostringstream serialized(std::ios::out | std::ios::binary);
+  ov::pass::Manager manager;
+  manager.register_pass<ov::pass::StreamSerialize>(serialized);
+  manager.run_passes(copy);
+  const auto bytes = serialized.str();
+  if (bytes.empty() || serialized.fail())
+    throw std::runtime_error("Flash executable cache graph serialization failed");
+  return sha256Bytes(bytes.data(), bytes.size(), "graph");
+}
+
+std::string makeFlashExecutableCacheKey(const ov::Model& model,
+                                        const std::string& device,
+                                        void* contextMarker,
+                                        const ov::AnyMap& compileConfig) {
+  std::string key;
+  appendCacheField(key, "flash-executable-cache-v2");
+  appendCacheField(key, ov::get_openvino_version().buildNumber);
+  appendCacheField(key, device);
+  appendCacheField(key, std::to_string(reinterpret_cast<std::uintptr_t>(contextMarker)));
+  appendCacheField(key, graphIdentity(model));
+  appendCacheField(key, compileConfigIdentity(compileConfig));
+#ifdef OTC_FLASH_GPU_PLUGIN_SHA256_BYTES
+  const std::array<unsigned char, 32> pluginHash{{OTC_FLASH_GPU_PLUGIN_SHA256_BYTES}};
+  appendCacheField(key, std::string_view(reinterpret_cast<const char*>(pluginHash.data()),
+                                         pluginHash.size()));
+#endif
+  return key;
+}
+
+FlashExecutableBlob lookupFlashExecutable(const std::string& key) {
+  if (key.empty()) return {};
+  auto& cache = flashExecutableCache();
+  std::lock_guard<std::mutex> lock(cache.mutex);
+  for (auto entry = cache.entries.begin(); entry != cache.entries.end(); ++entry) {
+    if (entry->key != key) continue;
+    auto blob = entry->blob;
+    cache.entries.splice(cache.entries.begin(), cache.entries, entry);
+    return blob;
+  }
+  return {};
+}
+
+void eraseFlashExecutable(const std::string& key, const FlashExecutableBlob& expected) noexcept {
+  if (key.empty()) return;
+  auto& cache = flashExecutableCache();
+  std::lock_guard<std::mutex> lock(cache.mutex);
+  for (auto entry = cache.entries.begin(); entry != cache.entries.end(); ++entry) {
+    if (entry->key == key && (!expected || entry->blob == expected)) {
+      cache.bytes -= entry->blob->size();
+      cache.entries.erase(entry);
+      return;
+    }
+  }
+}
+
+void storeFlashExecutable(std::string key, const FlashExecutableBlob& shared) {
+  if (key.empty() || !shared || shared->empty() ||
+      shared->size() > kFlashExecutableCacheMaxBytes) return;
+  auto& cache = flashExecutableCache();
+  std::lock_guard<std::mutex> lock(cache.mutex);
+  for (auto entry = cache.entries.begin(); entry != cache.entries.end(); ++entry) {
+    if (entry->key != key) continue;
+    cache.bytes -= entry->blob->size();
+    cache.entries.erase(entry);
+    break;
+  }
+  while (!cache.entries.empty() &&
+         (cache.entries.size() >= kFlashExecutableCacheMaxEntries ||
+          cache.bytes > kFlashExecutableCacheMaxBytes - shared->size())) {
+    cache.bytes -= cache.entries.back().blob->size();
+    cache.entries.pop_back();
+  }
+  cache.entries.push_front({std::move(key), shared});
+  cache.bytes += shared->size();
+}
+#endif
+
 void require(bool value, const std::string& message) {
   if (!value) throw std::runtime_error("FlashVSR+ GPU stage: " + message);
 }
@@ -63,6 +273,16 @@ FlashPorts describe(const Ports& ports) {
 }
 
 } // namespace
+
+std::string detail::flashExecutableCacheKey(const ov::Model& model, const std::string& device,
+                                            void* context, const ov::AnyMap& config) {
+#if OTC_FLASH_EXECUTABLE_CACHE
+  return makeFlashExecutableCacheKey(model, device, context, config);
+#else
+  (void)model; (void)device; (void)context; (void)config;
+  return {};
+#endif
+}
 
 void validateFlashCacheRuntime(const std::filesystem::path& library) {
 #if OTC_FLASH_EXECUTABLE_CACHE
@@ -195,6 +415,17 @@ FlashGpuStage::FlashGpuStage(ov::Core& core, ov::RemoteContext context,
   if (precision_ != FlashPrecision::pluginDefault)
     compileConfig_["INFERENCE_PRECISION_HINT"] = requestedPrecision;
   if (!kernelConfig.empty()) compileConfig_["CONFIG_FILE"] = kernelConfig;
+#if OTC_FLASH_EXECUTABLE_CACHE
+  // Cache identity generation is advisory. If a future graph/custom op cannot
+  // be serialized, compile normally rather than weakening the key or changing
+  // the worker's functional behavior.
+  try {
+    executableCacheKey_ = detail::flashExecutableCacheKey(
+        *model_, device, contextMarker_, compileConfig_);
+  } catch (const std::exception&) {
+    executableCacheKey_.clear();
+  }
+#endif
   for (const auto& weight : bindings_)
     weights_.emplace(weight.name, flashDeviceTensor(context_, ov::element::bf16, weight.shape));
   for (const auto& name : finiteFlags)
@@ -222,32 +453,64 @@ void FlashGpuStage::ensureCompiled() {
   const auto device = context_.get_device_name();
   const auto requestedPrecision = precision_ == FlashPrecision::rawBf16Transport
       ? ov::element::f16 : ov::element::dynamic;
-  try {
 #if OTC_FLASH_EXECUTABLE_CACHE
-    if (!compiledBlob_.empty()) {
-      std::istringstream blob(compiledBlob_, std::ios::in | std::ios::binary);
-      compiled_ = core_.import_model(blob, context_, compileConfig_);
-    } else
+  // Prefer this stage's own export. The process cache is only a sharing
+  // opportunity; its LRU may have evicted an entry still needed by a stage.
+  FlashExecutableBlob importedBlob = compiledBlob_;
 #endif
-      compiled_ = core_.compile_model(model_, context_, compileConfig_);
-    require(compiled_.get_property("EXECUTION_DEVICES").as<std::vector<std::string>>() ==
-                std::vector<std::string>{device}, "compiled execution device differs");
-    require(marker(compiled_.get_context().get_params(), "OCL_CONTEXT") == contextMarker_,
-            "compiled execution context differs");
-    require(static_cast<std::int32_t>(compiled_.get_property(ov::num_streams)) == 1 &&
-                compiled_.get_property("EXECUTION_MODE_HINT").as<ov::hint::ExecutionMode>() ==
-                    ov::hint::ExecutionMode::ACCURACY &&
-                (precision_ == FlashPrecision::pluginDefault ||
-                 compiled_.get_property("INFERENCE_PRECISION_HINT").as<ov::element::Type>() ==
-                     requestedPrecision), "compiled stream/precision policy differs");
-    validateFlashPorts(compiled_.inputs(), inputs_, true);
-    validateFlashPorts(compiled_.outputs(), outputs_, true);
+  try {
+    const auto validateCompiled = [&] {
+      require(compiled_.get_property("EXECUTION_DEVICES").as<std::vector<std::string>>() ==
+                  std::vector<std::string>{device}, "compiled execution device differs");
+      require(marker(compiled_.get_context().get_params(), "OCL_CONTEXT") == contextMarker_,
+              "compiled execution context differs");
+      require(static_cast<std::int32_t>(compiled_.get_property(ov::num_streams)) == 1 &&
+                  compiled_.get_property("EXECUTION_MODE_HINT").as<ov::hint::ExecutionMode>() ==
+                      ov::hint::ExecutionMode::ACCURACY &&
+                  (precision_ == FlashPrecision::pluginDefault ||
+                   compiled_.get_property("INFERENCE_PRECISION_HINT").as<ov::element::Type>() ==
+                       requestedPrecision), "compiled stream/precision policy differs");
+      validateFlashPorts(compiled_.inputs(), inputs_, true);
+      validateFlashPorts(compiled_.outputs(), outputs_, true);
+    };
 #if OTC_FLASH_EXECUTABLE_CACHE
-    if (compiledBlob_.empty()) {
-      std::ostringstream blob(std::ios::out | std::ios::binary);
-      compiled_.export_model(blob);
-      compiledBlob_ = blob.str();
-      require(!compiledBlob_.empty(), "compiled executable export is empty");
+    if (!importedBlob && !executableCacheKey_.empty())
+      importedBlob = lookupFlashExecutable(executableCacheKey_);
+    if (importedBlob) {
+      try {
+        std::istringstream blob(*importedBlob, std::ios::in | std::ios::binary);
+        compiled_ = core_.import_model(blob, context_, compileConfig_);
+        validateCompiled();
+        compiledBlob_ = importedBlob;
+      } catch (...) {
+        // A stale export is an ordinary cache miss. Never publish it again;
+        // compile and validate the graph under the current context instead.
+        eraseFlashExecutable(executableCacheKey_, importedBlob);
+        importedBlob.reset();
+        compiledBlob_.reset();
+        compiled_ = ov::CompiledModel{};
+      }
+    }
+    if (!compiled_)
+#endif
+    {
+      compiled_ = core_.compile_model(model_, context_, compileConfig_);
+      validateCompiled();
+    }
+#if OTC_FLASH_EXECUTABLE_CACHE
+    if (!importedBlob) {
+      // Reuse is advisory: export/allocation failure must not invalidate an
+      // already compiled and validated model under host-memory pressure.
+      try {
+        std::ostringstream blob(std::ios::out | std::ios::binary);
+        compiled_.export_model(blob);
+        auto exported = blob.str();
+        require(!exported.empty(), "compiled executable export is empty");
+        compiledBlob_ = std::make_shared<const std::string>(std::move(exported));
+        storeFlashExecutable(executableCacheKey_, compiledBlob_);
+      } catch (const std::exception&) {
+        compiledBlob_.reset();
+      }
     }
 #endif
     request_ = compiled_.create_infer_request();
@@ -258,6 +521,12 @@ void FlashGpuStage::ensureCompiled() {
       request_.set_tensor(name, tensor);
     for (auto& [shape, check] : outputChecks_) check->ensureCompiled();
   } catch (...) {
+#if OTC_FLASH_EXECUTABLE_CACHE
+    if (importedBlob) {
+      eraseFlashExecutable(executableCacheKey_, importedBlob);
+      compiledBlob_.reset();
+    }
+#endif
     ready_ = false;
     request_ = ov::InferRequest{};
     compiled_ = ov::CompiledModel{};

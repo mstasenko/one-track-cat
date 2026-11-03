@@ -43,10 +43,13 @@ void validate_bf16(const std::uint16_t* words, std::size_t count,
                    const char* name) {
   if (count != 0U && words == nullptr)
     throw std::invalid_argument(std::string(name) + " is null");
-  for (std::size_t index = 0U; index < count; ++index) {
-    if ((words[index] & kBf16ExponentMask) == kBf16ExponentMask)
-      throw std::invalid_argument(std::string(name) + " contains NaN or infinity");
-  }
+  // Match the GPU-stage scan: a reduction permits SIMD without skipping any
+  // word or weakening validation of a retained-read callback.
+  std::uint16_t non_finite = 0U;
+  for (std::size_t index = 0U; index < count; ++index)
+    non_finite |= (words[index] & kBf16ExponentMask) == kBf16ExponentMask;
+  if (non_finite)
+    throw std::invalid_argument(std::string(name) + " contains NaN or infinity");
 }
 
 void validate_f32(const float* values, std::size_t count, const char* name) {
@@ -112,6 +115,7 @@ std::uint64_t available_bytes(int fd) {
 struct FlashHistoryOwner::Mapping final {
   int fd = -1;
   void* data = MAP_FAILED;
+  void* alias_data = MAP_FAILED;
   std::size_t bytes = 0U;
   std::string name;
   std::uintmax_t device = 0U;
@@ -119,6 +123,7 @@ struct FlashHistoryOwner::Mapping final {
 
   ~Mapping() noexcept {
     if (data != MAP_FAILED) ::munmap(data, bytes);
+    if (alias_data != MAP_FAILED) ::munmap(alias_data, bytes);
     if (fd >= 0) ::close(fd);
   }
 };
@@ -233,6 +238,8 @@ std::shared_ptr<FlashHistoryOwner::Mapping> FlashHistoryOwner::create_mapping(
     const char* name, std::size_t bytes) {
   if (leaf_fd_ < 0 || name == nullptr || *name == '\0')
     throw std::logic_error("Flash history private leaf is not open");
+  const std::size_t mapped_bytes = checked_mul(bytes, 2U,
+                                               "history double mapping bytes");
   const int fd = ::openat(leaf_fd_, name,
                           O_CREAT | O_EXCL | O_RDWR | O_CLOEXEC | O_NOFOLLOW,
                           S_IRUSR | S_IWUSR);
@@ -274,16 +281,41 @@ std::shared_ptr<FlashHistoryOwner::Mapping> FlashHistoryOwner::create_mapping(
   have_identity = true;
   const auto device = static_cast<std::uintmax_t>(owned_info.st_dev);
   const auto inode = static_cast<std::uintmax_t>(owned_info.st_ino);
-  void* data = ::mmap(nullptr, bytes, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-  if (data == MAP_FAILED) {
+  // Reserve one contiguous virtual range and map the file twice into it.  A
+  // logical ring can then be exposed as one contiguous pointer even when it
+  // wraps, avoiding a full retained-history memmove on every update.
+  void* reservation = ::mmap(nullptr, mapped_bytes, PROT_NONE,
+                             MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  if (reservation == MAP_FAILED) {
     const int error = errno;
+    fail();
+    errno = error;
+    throw_errno("reserve history mapping", directory_ / name);
+  }
+  void* data = ::mmap(reservation, bytes, PROT_READ | PROT_WRITE,
+                      MAP_SHARED | MAP_FIXED, fd, 0);
+  void* alias = MAP_FAILED;
+  if (data != reservation) {
+    const int error = errno == 0 ? EFAULT : errno;
+    ::munmap(reservation, mapped_bytes);
     fail();
     errno = error;
     throw_errno("mmap history file", directory_ / name);
   }
+  auto* alias_address = static_cast<std::byte*>(reservation) + bytes;
+  alias = ::mmap(alias_address, bytes, PROT_READ | PROT_WRITE,
+                 MAP_SHARED | MAP_FIXED, fd, 0);
+  if (alias != alias_address) {
+    const int error = errno == 0 ? EFAULT : errno;
+    ::munmap(reservation, mapped_bytes);
+    fail();
+    errno = error;
+    throw_errno("mmap history alias", directory_ / name);
+  }
   auto mapping = std::make_shared<Mapping>();
   mapping->fd = fd;
   mapping->data = data;
+  mapping->alias_data = alias;
   mapping->bytes = bytes;
   mapping->name = name;
   mapping->device = device;
@@ -399,25 +431,37 @@ bool FlashHistoryOwner::has_live_view() const noexcept {
   return k_mapping_.use_count() > 1U || v_mapping_.use_count() > 1U;
 }
 
-void FlashHistoryOwner::synchronize() {
+bool FlashHistoryOwner::mapping_ranges_overlap(const void* pointer,
+                                               std::size_t bytes) const {
+  return ranges_overlap_bytes(pointer, bytes, k_mapping_->data, mapping_bytes_)
+      || ranges_overlap_bytes(pointer, bytes, k_mapping_->alias_data, mapping_bytes_)
+      || ranges_overlap_bytes(pointer, bytes, v_mapping_->data, mapping_bytes_)
+      || ranges_overlap_bytes(pointer, bytes, v_mapping_->alias_data, mapping_bytes_);
+}
+
+void FlashHistoryOwner::synchronize(bool force) {
   validate_files();
-  if (::msync(k_mapping_->data, mapping_bytes_, MS_SYNC) != 0)
-    throw_errno("msync K history", k_path_);
-  if (::msync(v_mapping_->data, mapping_bytes_, MS_SYNC) != 0)
-    throw_errno("msync V history", v_path_);
-  if (::fsync(k_mapping_->fd) != 0) throw_errno("fsync K history", k_path_);
-  if (::fsync(v_mapping_->fd) != 0) throw_errno("fsync V history", v_path_);
+  // Scratch is not a recovery log: MAP_SHARED keeps updates visible to the
+  // next view, while Linux writes dirty pages in the background and reclaims
+  // them under pressure. Waiting for durable storage after every layer stalls
+  // the GPU. Only an explicit flush requires persistence.
+  if (force) {
+    if (::msync(k_mapping_->data, mapping_bytes_, MS_SYNC) != 0)
+      throw_errno("msync K history", k_path_);
+    if (::msync(v_mapping_->data, mapping_bytes_, MS_SYNC) != 0)
+      throw_errno("msync V history", v_path_);
+    if (::fsync(k_mapping_->fd) != 0) throw_errno("fsync K history", k_path_);
+    if (::fsync(v_mapping_->fd) != 0) throw_errno("fsync V history", v_path_);
+  }
 #if defined(__linux__)
-  if (::posix_fadvise(k_mapping_->fd, 0, static_cast<off_t>(mapping_bytes_),
-                      POSIX_FADV_DONTNEED) != 0)
-    throw std::runtime_error("posix_fadvise K history failed");
-  if (::posix_fadvise(v_mapping_->fd, 0, static_cast<off_t>(mapping_bytes_),
-                      POSIX_FADV_DONTNEED) != 0)
-    throw std::runtime_error("posix_fadvise V history failed");
   if (::madvise(k_mapping_->data, mapping_bytes_, MADV_DONTNEED) != 0)
     throw_errno("madvise K history", k_path_);
+  if (::madvise(k_mapping_->alias_data, mapping_bytes_, MADV_DONTNEED) != 0)
+    throw_errno("madvise K history alias", k_path_);
   if (::madvise(v_mapping_->data, mapping_bytes_, MADV_DONTNEED) != 0)
     throw_errno("madvise V history", v_path_);
+  if (::madvise(v_mapping_->alias_data, mapping_bytes_, MADV_DONTNEED) != 0)
+    throw_errno("madvise V history alias", v_path_);
 #endif
 }
 
@@ -500,21 +544,11 @@ std::vector<float> FlashHistoryOwner::update(const FlashHistoryUpdate& current) 
                                   "merged current offset"),
                 current.current_pooled + current_head, current_pooled_bytes);
   }
-  const std::size_t mapped_values = checked_mul(
-      capacity_windows_, kFlashHistoryWindowRows * kFlashHistoryChannels,
-      "mapped history values");
-  if (current.current_k != nullptr && (ranges_overlap(current.current_k, current_values,
-                     static_cast<const std::uint16_t*>(k_mapping_->data),
-                     mapped_values)
-      || ranges_overlap(current.current_k, current_values,
-                        static_cast<const std::uint16_t*>(v_mapping_->data),
-                        mapped_values)
-      || ranges_overlap(current.current_v, current_values,
-                        static_cast<const std::uint16_t*>(v_mapping_->data),
-                        mapped_values)
-      || ranges_overlap(current.current_v, current_values,
-                        static_cast<const std::uint16_t*>(k_mapping_->data),
-                        mapped_values)))
+  const std::size_t current_kv_bytes = checked_mul(
+      current_values, sizeof(std::uint16_t), "current K/V history bytes");
+  if (current.current_k != nullptr
+      && (mapping_ranges_overlap(current.current_k, current_kv_bytes)
+          || mapping_ranges_overlap(current.current_v, current_kv_bytes)))
     throw std::invalid_argument("current history must not alias the owned mapping");
   if (current.current_k != nullptr && ranges_overlap(current.current_k, current_values,
                                                      current.current_v, current_values))
@@ -525,10 +559,7 @@ std::vector<float> FlashHistoryOwner::update(const FlashHistoryUpdate& current) 
       pooled_capacity_elements_, sizeof(float), "pooled history capacity bytes");
   if (ranges_overlap_bytes(current.current_pooled, pooled_bytes, pooled_->data(),
                            pooled_capacity_bytes)
-      || ranges_overlap_bytes(current.current_pooled, pooled_bytes,
-                              k_mapping_->data, mapping_bytes_)
-      || ranges_overlap_bytes(current.current_pooled, pooled_bytes,
-                              v_mapping_->data, mapping_bytes_))
+      || mapping_ranges_overlap(current.current_pooled, pooled_bytes))
     throw std::invalid_argument("current pooled history must not alias owned storage");
   if (current.current_k != nullptr
       && (ranges_overlap_bytes(current.current_pooled, pooled_bytes,
@@ -555,10 +586,6 @@ std::vector<float> FlashHistoryOwner::update(const FlashHistoryUpdate& current) 
                                               kFlashHistoryWindowRows *
                                                   kFlashHistoryChannels,
                                               "retained history values");
-  const std::size_t old_values = checked_mul(old_start,
-                                             kFlashHistoryWindowRows *
-                                                 kFlashHistoryChannels,
-                                             "old history values");
   const std::size_t source_values = checked_mul(source_start,
                                                 kFlashHistoryWindowRows *
                                                     kFlashHistoryChannels,
@@ -573,17 +600,21 @@ std::vector<float> FlashHistoryOwner::update(const FlashHistoryUpdate& current) 
       keep_current, checked_mul(kFlashHistoryWindowRows, sizeof(float),
                                 "pooled window bytes"),
       "pooled copy bytes");
+  const std::size_t window_values = checked_mul(
+      kFlashHistoryWindowRows, kFlashHistoryChannels, "history window values");
+  const std::size_t new_ring_start =
+      (ring_start_windows_ + old_start) % capacity_windows_;
+  const std::size_t destination_window = checked_add(
+      new_ring_start, keep_old, "ring destination window");
   try {
-    auto* k = static_cast<std::uint16_t*>(k_mapping_->data);
-    auto* v = static_cast<std::uint16_t*>(v_mapping_->data);
+    auto* k = static_cast<std::uint16_t*>(k_mapping_->data)
+        + checked_mul(destination_window, window_values,
+                      "ring K destination");
+    auto* v = static_cast<std::uint16_t*>(v_mapping_->data)
+        + checked_mul(destination_window, window_values,
+                      "ring V destination");
     auto* pooled = pooled_->data();
     if (keep_old != 0U) {
-      std::memmove(k, k + old_values, keep_old *
-                   kFlashHistoryWindowRows * kFlashHistoryChannels *
-                   kFlashHistoryElementBytes);
-      std::memmove(v, v + old_values, keep_old *
-                   kFlashHistoryWindowRows * kFlashHistoryChannels *
-                   kFlashHistoryElementBytes);
       const std::size_t pooled_move_bytes = checked_mul(
           keep_old, checked_mul(kFlashHistoryWindowRows, sizeof(float),
                                 "pooled window bytes"),
@@ -596,25 +627,22 @@ std::vector<float> FlashHistoryOwner::update(const FlashHistoryUpdate& current) 
                      pooled_move_bytes);
       }
     }
-    const std::size_t destination_values = checked_mul(
-        keep_old, kFlashHistoryWindowRows * kFlashHistoryChannels,
-        "destination history values");
     if (current.read_retained) {
-      std::fill(k + destination_values, k + destination_values + keep_values,
+      std::fill(k, k + keep_values,
                 static_cast<std::uint16_t>(0x7F80U));
-      std::fill(v + destination_values, v + destination_values + keep_values,
+      std::fill(v, v + keep_values,
                 static_cast<std::uint16_t>(0x7F80U));
-      current.read_retained(k + destination_values, v + destination_values,
+      current.read_retained(k, v,
                             source_start, keep_current);
-      validate_bf16(k + destination_values, keep_values,
+      validate_bf16(k, keep_values,
                     "retained K history callback");
-      validate_bf16(v + destination_values, keep_values,
+      validate_bf16(v, keep_values,
                     "retained V history callback");
     } else {
-      std::memcpy(k + destination_values, current.current_k + source_values,
+      std::memcpy(k, current.current_k + source_values,
                   checked_mul(keep_values, kFlashHistoryElementBytes,
                               "current K history bytes"));
-      std::memcpy(v + destination_values, current.current_v + source_values,
+      std::memcpy(v, current.current_v + source_values,
                   checked_mul(keep_values, kFlashHistoryElementBytes,
                               "current V history bytes"));
     }
@@ -629,8 +657,9 @@ std::vector<float> FlashHistoryOwner::update(const FlashHistoryUpdate& current) 
                   current.current_pooled + source_head + pooled_source_offset,
                   pooled_copy_bytes);
     }
+    ring_start_windows_ = new_ring_start;
     valid_windows_ = keep_old + keep_current;
-    synchronize();
+    synchronize(false);
     return merged;
   } catch (...) {
     cleanup_noexcept();
@@ -651,8 +680,12 @@ FlashHistoryView FlashHistoryOwner::view() const {
   auto keep = std::make_shared<ViewKeepAlive>(
       ViewKeepAlive{k_mapping_, v_mapping_, pooled_});
   std::shared_ptr<const void> opaque = std::move(keep);
-  return FlashHistoryView(static_cast<const std::uint16_t*>(k_mapping_->data),
-                          static_cast<const std::uint16_t*>(v_mapping_->data),
+  const std::size_t ring_offset = checked_mul(
+      ring_start_windows_, kFlashHistoryWindowRows * kFlashHistoryChannels,
+      "pooled view ring offset");
+  return FlashHistoryView(
+      static_cast<const std::uint16_t*>(k_mapping_->data) + ring_offset,
+      static_cast<const std::uint16_t*>(v_mapping_->data) + ring_offset,
                           valid_windows_, pooled_->data(),
                           checked_mul(checked_mul(kFlashHistoryPooledHeads,
                                                   valid_windows_,
@@ -716,6 +749,7 @@ void FlashHistoryOwner::cleanup_noexcept() noexcept {
   leaf_fd_ = -1;
   parent_fd_ = -1;
   valid_windows_ = 0U;
+  ring_start_windows_ = 0U;
   released_ = true;
 }
 

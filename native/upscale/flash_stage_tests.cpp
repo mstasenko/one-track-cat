@@ -1,6 +1,8 @@
 #include "flash_stage.hpp"
 
 #include <openvino/op/parameter.hpp>
+#include <openvino/op/constant.hpp>
+#include <openvino/op/add.hpp>
 
 #include <array>
 #include <cassert>
@@ -21,6 +23,24 @@ int main(int argc, char** argv) {
   };
   rejects([&] { validateFlashCacheRuntime("/nonexistent/otc-gpu-plugin.so"); });
   if (argc == 2) validateFlashCacheRuntime(argv[1]); // CPU-only artifact qualification.
+#if OTC_FLASH_EXECUTABLE_CACHE
+  const auto makeGraph = [](float value) {
+    auto x = std::make_shared<ov::op::v0::Parameter>(ov::element::f32, ov::Shape{1});
+    x->output(0).get_tensor().set_names({"input"});
+    auto scalar = ov::op::v0::Constant::create(ov::element::f32, ov::Shape{1}, {value});
+    auto add = std::make_shared<ov::op::v1::Add>(x, scalar);
+    add->output(0).get_tensor().set_names({"output"});
+    return std::make_shared<ov::Model>(ov::OutputVector{add}, ov::ParameterVector{x});
+  };
+  const auto first = makeGraph(1), same = makeGraph(1), changed = makeGraph(2);
+  const auto key = detail::flashExecutableCacheKey(*first, "GPU.1", nullptr, {});
+  assert(!key.empty());
+  assert(key == detail::flashExecutableCacheKey(*same, "GPU.1", nullptr, {}));
+  assert(key != detail::flashExecutableCacheKey(*changed, "GPU.1", nullptr, {}));
+  assert(key != detail::flashExecutableCacheKey(*same, "GPU.2", nullptr, {}));
+  assert(key != detail::flashExecutableCacheKey(*same, "GPU.1", reinterpret_cast<void*>(1), {}));
+  assert(key != detail::flashExecutableCacheKey(*same, "GPU.1", nullptr, {{"CACHE_DIR", std::string("different")}}));
+#endif
   std::vector<std::uint16_t> finite;
   for (unsigned word = 0; word < 65536; ++word)
     if ((word & 0x7f80U) != 0x7f80U) finite.push_back(static_cast<std::uint16_t>(word));

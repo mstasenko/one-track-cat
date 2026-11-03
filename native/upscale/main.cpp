@@ -30,6 +30,7 @@
 #include <memory>
 #include <optional>
 #include <stdexcept>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -53,6 +54,7 @@ volatile std::sig_atomic_t stopRequested = 0;
 struct Options final {
   std::filesystem::path models;
   std::filesystem::path scratch;
+  std::filesystem::path cancelFile;
   std::filesystem::path rifeModel;
   FlashMode mode = FlashMode::turbo;
   int width = 0;
@@ -71,6 +73,7 @@ struct Options final {
   throw std::runtime_error(
       message +
       "\nusage: otc-upscale --mode turbo|base --models DIR --scratch PRIVATE_DIR "
+      "[--cancel-file PATH] "
       "--rife rife.xml --width N --height N --fps N "
       "--output-width N --output-height N --output-fps N --duration SECONDS "
       "--device AUTO|CPU|GPU.N [--spatial-range FIRST:STOP ...]");
@@ -200,7 +203,7 @@ Options parseOptions(int argc, char** argv) {
     const std::string_view argument = argv[index];
     if (argument == "--help") {
       std::cout << "usage: otc-upscale --mode turbo|base --models DIR "
-                    "--scratch PRIVATE_DIR --rife rife.xml "
+                    "--scratch PRIVATE_DIR [--cancel-file PATH] --rife rife.xml "
                     "--width N --height N --fps N --output-width N "
                     "--output-height N --output-fps N --duration SECONDS "
                     "--device AUTO|CPU|GPU.N\n";
@@ -210,6 +213,9 @@ Options parseOptions(int argc, char** argv) {
       options.models = requireValue(argc, argv, index, "--models");
     } else if (argument == "--scratch") {
       options.scratch = requireValue(argc, argv, index, "--scratch");
+    } else if (argument == "--cancel-file") {
+      options.cancelFile = requireValue(argc, argv, index, "--cancel-file");
+      if (!options.cancelFile.is_absolute()) usageError("--cancel-file must be absolute");
     } else if (argument == "--rife") {
       options.rifeModel = requireValue(argc, argv, index, "--rife");
     } else if (argument == "--mode") {
@@ -307,6 +313,28 @@ bool readFrame(std::istream& stream, std::vector<std::uint8_t>& frame) {
   return true;
 }
 
+bool cancelMarkerExists(const std::filesystem::path& path) {
+  if (path.empty()) return false;
+  std::error_code error;
+  const bool exists = std::filesystem::exists(path, error);
+  if (error)
+    throw std::runtime_error("could not inspect the AI cancellation marker: " +
+                             error.message());
+  return exists;
+}
+
+bool cancellationRequested(const std::filesystem::path& path) {
+  return stopRequested != 0 || cancelMarkerExists(path);
+}
+
+void checkCancellation(const std::filesystem::path& path) {
+  if (!cancellationRequested(path)) return;
+  // Keep the existing cooperative signal/EOF teardown path authoritative for
+  // the process owner after a marker is observed.
+  stopRequested = 1;
+  throw std::runtime_error("AI worker cancelled");
+}
+
 // Take ownership so unchanged geometry can pass through without a second RGB copy.
 upscale::RgbFrame resizeRgb(upscale::RgbFrame source, int outputWidth, int outputHeight) {
   if (source.width == outputWidth && source.height == outputHeight) return source;
@@ -314,6 +342,17 @@ upscale::RgbFrame resizeRgb(upscale::RgbFrame source, int outputWidth, int outpu
       outputWidth, outputHeight,
       std::vector<std::uint8_t>(static_cast<std::size_t>(outputWidth) *
                                 static_cast<std::size_t>(outputHeight) * 3U)};
+  // Horizontal coordinates repeat for every row. Precompute them once while
+  // preserving the original double arithmetic and rounding exactly.
+  struct Column { int first, second; double fraction; };
+  std::vector<Column> columns(static_cast<std::size_t>(outputWidth));
+  for (int x = 0; x < outputWidth; ++x) {
+    const double sourceX = (static_cast<double>(x) + 0.5) * source.width /
+                               static_cast<double>(outputWidth) - 0.5;
+    const int x0 = std::clamp(static_cast<int>(std::floor(sourceX)), 0, source.width - 1);
+    columns[x] = {x0, std::clamp(x0 + 1, 0, source.width - 1),
+                  std::clamp(sourceX - x0, 0.0, 1.0)};
+  }
   for (int y = 0; y < outputHeight; ++y) {
     const double sourceY = (static_cast<double>(y) + 0.5) * source.height /
                                static_cast<double>(outputHeight) - 0.5;
@@ -321,11 +360,9 @@ upscale::RgbFrame resizeRgb(upscale::RgbFrame source, int outputWidth, int outpu
     const int y1 = std::clamp(y0 + 1, 0, source.height - 1);
     const double fy = std::clamp(sourceY - y0, 0.0, 1.0);
     for (int x = 0; x < outputWidth; ++x) {
-      const double sourceX = (static_cast<double>(x) + 0.5) * source.width /
-                                 static_cast<double>(outputWidth) - 0.5;
-      const int x0 = std::clamp(static_cast<int>(std::floor(sourceX)), 0, source.width - 1);
-      const int x1 = std::clamp(x0 + 1, 0, source.width - 1);
-      const double fx = std::clamp(sourceX - x0, 0.0, 1.0);
+      const auto& column = columns[x];
+      const int x0 = column.first, x1 = column.second;
+      const double fx = column.fraction;
       const auto destination = (static_cast<std::size_t>(y) * outputWidth + x) * 3U;
       const auto a = (static_cast<std::size_t>(y0) * source.width + x0) * 3U;
       const auto b = (static_cast<std::size_t>(y0) * source.width + x1) * 3U;
@@ -444,6 +481,18 @@ class RifeSession final {
     // The GPU plugin retains inference buffers in the compiled model, not
     // just the request. Both must retire before Flash resumes on a 12GB GPU.
     request_.reset();
+#if OTC_FLASH_EXECUTABLE_CACHE
+    if (compiled_ && gpuFast_ && executableBlob_.empty()) {
+      // This session's fixed model/context/config never change. Retain only
+      // its executable bytes when releasing GPU inference buffers for Flash.
+      try {
+        std::ostringstream bytes(std::ios::out | std::ios::binary);
+        compiled_->export_model(bytes);
+        auto blob = bytes.str();
+        if (blob.size() <= 128U * 1024U * 1024U) executableBlob_ = std::move(blob);
+      } catch (const std::exception&) { executableBlob_.clear(); }
+    }
+#endif
     compiled_.reset();
   }
 
@@ -550,6 +599,15 @@ class RifeSession final {
     if (device_ != "CPU")
       properties.insert(ov::intel_gpu::hint::queue_throttle(
           ov::intel_gpu::hint::ThrottleLevel::LOW));
+#if OTC_FLASH_EXECUTABLE_CACHE
+    if (!executableBlob_.empty()) {
+      try {
+        std::istringstream bytes(executableBlob_, std::ios::in | std::ios::binary);
+        compiled_.emplace(core_.import_model(bytes, device_, properties));
+        return;
+      } catch (...) { executableBlob_.clear(); }
+    }
+#endif
     compiled_.emplace(core_.compile_model(model_, device_, properties));
   }
 
@@ -561,6 +619,9 @@ class RifeSession final {
   std::optional<VerifiedKernelFiles> kernels_;
   std::optional<ov::CompiledModel> compiled_;
   std::optional<ov::InferRequest> request_;
+#if OTC_FLASH_EXECUTABLE_CACHE
+  std::string executableBlob_;
+#endif
 };
 
 std::string oneLineError(const std::exception& error) {
@@ -672,16 +733,18 @@ std::vector<std::string> deviceCandidates(ov::Core& core, const std::string& req
 class RifeRuntime final {
  public:
   RifeRuntime(ov::Core core, const std::filesystem::path& model, std::vector<std::string> candidates,
-              std::ostream& diagnostics)
+              std::ostream& diagnostics, std::filesystem::path cancelFile = {})
       : core_(std::move(core)), owner_(readAssets(model)), assets_(model.parent_path()),
-        candidates_(std::move(candidates)), diagnostics_(diagnostics) {
+        candidates_(std::move(candidates)), diagnostics_(diagnostics),
+        cancelFile_(std::move(cancelFile)) {
     const ov::Tensor weights(ov::element::u8, {owner_.binBytes()}, owner_.binData());
     model_ = core_.read_model(owner_.xml(), weights);
   }
 
   bool activate(int width, int height) {
     session_.reset();
-    while (nextCandidate_ < candidates_.size() && stopRequested == 0) {
+    while (nextCandidate_ < candidates_.size() && !cancellationRequested(cancelFile_)) {
+      checkCancellation(cancelFile_);
       const auto candidate = candidates_[nextCandidate_++];
       try {
         auto candidateSession = std::make_unique<RifeSession>(core_, model_->clone(), candidate,
@@ -694,6 +757,7 @@ class RifeRuntime final {
                      << " failed reason=" << oneLineError(error) << '\n';
       }
     }
+    checkCancellation(cancelFile_);
     return false;
   }
 
@@ -702,9 +766,12 @@ class RifeRuntime final {
   }
 
   upscale::RgbFrame infer(const upscale::RgbFrame& first, const upscale::RgbFrame& second, float timestep) {
+    checkCancellation(cancelFile_);
     if (!session_ && !activate(first.width, first.height))
       throw std::runtime_error("could not compile RIFE on any requested device");
-    return session_->infer(first, second, timestep);
+    auto result = session_->infer(first, second, timestep);
+    checkCancellation(cancelFile_);
+    return result;
   }
 
  private:
@@ -722,6 +789,7 @@ class RifeRuntime final {
   std::size_t nextCandidate_ = 0U;
   std::unique_ptr<RifeSession> session_;
   std::ostream& diagnostics_;
+  std::filesystem::path cancelFile_;
 };
 
 struct InputReader final {
@@ -735,7 +803,8 @@ struct InputReader final {
 
   std::optional<SourceFrame> next(bool upscaleSpatial,
                                   const upscale::RgbFrame* previousFrame = nullptr) {
-    if (readCount >= requiredFrames || stopRequested != 0) return std::nullopt;
+    checkCancellation(options.cancelFile);
+    if (readCount >= requiredFrames) return std::nullopt;
     upscale::RgbFrame original{
         options.width, options.height,
         pixelPool ? pixelPool->acquire()
@@ -743,9 +812,10 @@ struct InputReader final {
                                                                   "source dimensions"))};
     // Failed/partial reads discard their buffer; only complete frames can be retained.
     if (!readFrame(std::cin, original.pixels)) {
-      if (stopRequested != 0) return std::nullopt;
+      if (cancellationRequested(options.cancelFile)) return std::nullopt;
       throw std::runtime_error("source ended before the requested duration");
     }
+    checkCancellation(options.cancelFile);
     const auto sample = sceneSample(original);
     double difference = 0.0;
     for (std::size_t index = 0U; index < previousSample.size(); ++index)
@@ -787,12 +857,12 @@ struct InputReader final {
   void drain() {
     std::vector<std::uint8_t> frame(
         checkedFrameBytes(options.width, options.height, "source dimensions"));
-    while (stopRequested == 0 && readFrame(std::cin, frame)) {}
+    while (!cancellationRequested(options.cancelFile) && readFrame(std::cin, frame)) {}
   }
 };
 
 bool mayRetryRife(const Options& options) {
-  return stopRequested == 0 && options.device == "AUTO";
+  return !cancellationRequested(options.cancelFile) && options.device == "AUTO";
 }
 
 const upscale::RgbFrame* processBaseFrame(const upscale::RgbFrame& first,
@@ -811,10 +881,11 @@ const upscale::RgbFrame* processBaseFrame(const upscale::RgbFrame& first,
 
 class ProgressReporter final {
  public:
-  explicit ProgressReporter(std::ostream& output) : output_(output) {}
+  explicit ProgressReporter(std::ostream& output, std::filesystem::path cancelFile = {})
+      : output_(output), cancelFile_(std::move(cancelFile)) {}
 
   void operator()(double value) {
-    if (stopRequested != 0) throw std::runtime_error("AI worker cancelled");
+    checkCancellation(cancelFile_);
     if (!std::isfinite(value) || value < 0.0 || value > 1.0)
       throw std::runtime_error("Flash progress is outside [0,1]");
     if (value + 1.0e-12 < last_) throw std::runtime_error("Flash progress regressed");
@@ -828,6 +899,7 @@ class ProgressReporter final {
 
  private:
   std::ostream& output_;
+  std::filesystem::path cancelFile_;
   double last_ = 0.0;
   int lastPercent_ = -1;
 };
@@ -848,6 +920,7 @@ int main(int argc, char** argv) {
                                                std::cerr, std::cerr))
       return *result;
     const auto options = parseOptions(argc, argv);
+    checkCancellation(options.cancelFile);
     const auto outputFrames = outputFrameCount(options.duration, options.outputFps);
     const auto requiredSourceFrames = outputFrameCount(options.duration, options.fps);
     auto clockOptions = options;
@@ -887,7 +960,8 @@ int main(int argc, char** argv) {
     std::unique_ptr<RifeRuntime> rife;
     if (needRife) {
       rife = std::make_unique<RifeRuntime>(
-          *core, options.rifeModel, deviceCandidates(*core, options.device, false), std::cerr);
+          *core, options.rifeModel, deviceCandidates(*core, options.device, false), std::cerr,
+          options.cancelFile);
     }
 
     std::unique_ptr<InputReader> input;
@@ -903,17 +977,16 @@ int main(int argc, char** argv) {
       input = std::make_unique<InputReader>(InputReader{
           options, static_cast<std::size_t>(requiredSourceFrames), 0U, {}});
       auto reader = [inputPtr = input.get()]() -> std::optional<SourceFrame> {
-        if (stopRequested != 0) return std::nullopt;
         return inputPtr->next(true);
       };
       auto beforeGpu = [&, flashDevice]() {
-        if (stopRequested != 0) throw std::runtime_error("AI worker cancelled");
+        checkCancellation(options.cancelFile);
         if (rife) rife->suspend();
         reportDevice(std::cerr, *core, "flash", flashDevice);
       };
       auto ranges = options.spatialRanges;
       if (ranges.empty()) ranges.emplace_back(0U, requiredSourceFrames);
-      auto progress = std::make_shared<ProgressReporter>(std::cerr);
+      auto progress = std::make_shared<ProgressReporter>(std::cerr, options.cancelFile);
       spatial = std::make_unique<SpatialRangeReader>(std::move(ranges), std::move(reader),
           [&, flashContext, beforeGpu, useHostTileHistory, progress](SpatialRange range, SpatialRangeReader::Reader source) {
             auto report = [range, requiredSourceFrames, progress](double fraction) {
@@ -943,7 +1016,7 @@ int main(int argc, char** argv) {
                         }}
                   : InterpolationWindow::Retainer{}};
     if (!window.initialize()) {
-      if (stopRequested != 0) return 0;
+      if (cancellationRequested(options.cancelFile)) return 0;
       throw std::runtime_error("source ended before the requested duration");
     }
 
@@ -951,9 +1024,9 @@ int main(int argc, char** argv) {
       std::cout.write(reinterpret_cast<const char*>(frame.pixels.data()),
                       static_cast<std::streamsize>(frame.pixels.size()));
       if (!std::cout) throw std::runtime_error("output pipe closed");
-    }, [] { return stopRequested != 0; });
+    }, [&] { return cancellationRequested(options.cancelFile); });
     for (std::uint64_t outputIndex = 0U;
-         outputIndex < outputFrames && stopRequested == 0; ++outputIndex) {
+         outputIndex < outputFrames && !cancellationRequested(options.cancelFile); ++outputIndex) {
       const double timestamp = static_cast<double>(outputIndex) / options.outputFps;
       window.ensureRight(timestamp);
       if (!window.left) throw std::runtime_error("source frame window is empty");
@@ -1006,7 +1079,7 @@ int main(int argc, char** argv) {
       if (!writer.enqueue(std::move(output))) return 0;
     }
 
-    if (stopRequested != 0) return 0;
+    if (cancellationRequested(options.cancelFile)) return 0;
     writer.finish();
     std::cout.flush();
     if (!std::cout) throw std::runtime_error("output pipe closed");
@@ -1015,14 +1088,17 @@ int main(int argc, char** argv) {
     // this does not rewind Flash state and keeps drain/partial-frame behavior
     // identical for enhanced and passthrough paths.
     if (needFlash) {
-      while (input->readCount < requiredSourceFrames && stopRequested == 0) {
+      while (input->readCount < requiredSourceFrames &&
+             !cancellationRequested(options.cancelFile)) {
         if (!spatial->next()) break;
       }
     } else {
-      while (input->readCount < requiredSourceFrames && stopRequested == 0) {
+      while (input->readCount < requiredSourceFrames &&
+             !cancellationRequested(options.cancelFile)) {
         if (!input->next(false)) break;
       }
     }
+    if (cancellationRequested(options.cancelFile)) return 0;
     if (input->readCount < requiredSourceFrames)
       throw std::runtime_error("source ended before the requested duration");
     input->drain();

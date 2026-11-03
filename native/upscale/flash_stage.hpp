@@ -22,6 +22,12 @@ bool flashUsesPackedKv(ov::Core& core, const ov::RemoteContext& context);
 // The build number alone cannot distinguish the stock ABI-compatible plugin.
 void validateFlashCacheRuntime(const std::filesystem::path& library);
 
+namespace detail {
+// CPU-testable executable identity: attributes, constants, kernels and policy.
+std::string flashExecutableCacheKey(const ov::Model& model, const std::string& device,
+                                   void* context, const ov::AnyMap& config);
+}
+
 enum class FlashOutputCheck { none, bf16, bf16Readback };
 // F16 is a two-byte transport view only for the qualified split-key kernel;
 // it must never narrow BF16 activations through numeric FP16 arithmetic.
@@ -130,7 +136,9 @@ class FlashGpuStage final {
   void bind(const ModelOwnedIr& owner);
   // Release the compiled graph, request, and recursive finite-check workspaces
   // while retaining the authenticated model, context, and learned device
-  // banks. The next bind/run lazily rebuilds the exact same compiled policy.
+  // banks. When executable reuse is enabled, the bounded process cache keeps
+  // only an exported graph blob; the next bind/run imports it under the exact
+  // graph/context/compile-policy key.
   void suspend() noexcept;
   // Non-flag tensors are complete USM device or host roots. Outputs must be
   // distinct from every input and from each other; read-only inputs may alias.
@@ -151,9 +159,13 @@ class FlashGpuStage final {
   std::vector<FlashStageWeight> bindings_;
   FlashPrecision precision_ = FlashPrecision::pluginDefault;
   ov::AnyMap compileConfig_;
-  // Produced only by this authenticated graph/context; never loaded from disk.
-  // suspend() releases GPU workspaces while retaining the process-private blob.
-  std::string compiledBlob_;
+#if OTC_FLASH_EXECUTABLE_CACHE
+  // Keep this stage's authenticated export alive across suspend(). The bounded
+  // process cache stores the same pointer, so evicting its entry cannot force
+  // an active stage to compile again.
+  std::shared_ptr<const std::string> compiledBlob_;
+  std::string executableCacheKey_;
+#endif
   FlashTensors weights_, flags_;
   ov::CompiledModel compiled_;
   ov::InferRequest request_;

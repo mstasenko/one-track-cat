@@ -260,6 +260,7 @@ class FlashVideoController::Impl final {
                                            {1U, 32640U, 1536U});
       std::vector<std::uint16_t> lqPacked(kLqGroupWords);
       for (std::size_t group = 0U; group < 4U; ++group) {
+        report(batch.callIndex, 0.25 * static_cast<double>(group) / 4.0);
         packLqGroup(firstProjection + group * 4U, lqGroup, lqPacked);
         lq_->project(lqGroup, lqProjected);
         ov::Tensor conditionView(ov::element::bf16, {1U, 32640U, 1536U},
