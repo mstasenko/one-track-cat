@@ -8,6 +8,8 @@ const binaryMocks = vi.hoisted(() => ({
     `${process.cwd()}/node_modules/ffmpeg-static/ffmpeg`
   ])
 }))
+const childMocks = vi.hoisted(() => ({ execFile: vi.fn() }))
+vi.mock('node:child_process', () => ({ default: { execFile: childMocks.execFile }, execFile: childMocks.execFile }))
 const fsMocks = vi.hoisted(() => ({ access: vi.fn(), readdir: vi.fn(), readFile: vi.fn() }))
 vi.mock('electron', () => electronMock)
 vi.mock('node:fs/promises', async (importOriginal) => {
@@ -28,6 +30,7 @@ afterEach(() => {
     '/usr/bin/ffmpeg', '/usr/local/bin/ffmpeg', `${process.cwd()}/dist/ffmpeg-vaapi/ffmpeg`,
     `${process.cwd()}/node_modules/ffmpeg-static/ffmpeg`
   ])
+  childMocks.execFile.mockReset()
   fsMocks.readFile.mockReset()
   fsMocks.access.mockReset()
   fsMocks.readdir.mockReset()
@@ -127,6 +130,37 @@ describe('export encoder', () => {
     fsMocks.access.mockResolvedValue(undefined)
     await expect(integratedDecodeDevice()).resolves.toBe('/dev/dri/renderD128')
     expect(fsMocks.access).toHaveBeenCalledWith('/dev/dri/renderD128', expect.any(Number))
+  })
+
+  it.each([false, true])('probes only explicit Intel VAAPI and keeps CPU fallback (failure=%s)', async (failure) => {
+    vi.stubEnv('otc_CPU_ONLY', '0')
+    fsMocks.readdir.mockResolvedValue([{ name: 'renderD128', isCharacterDevice: () => true }])
+    fsMocks.readFile.mockImplementation((path: string) => Promise.resolve(
+      path.endsWith('/vendor') ? '0x8086\n' : 'PCI_SLOT_NAME=0000:00:02.0\n'))
+    fsMocks.access.mockResolvedValue(undefined)
+    childMocks.execFile.mockImplementation((_file: string, _args: string[], _options: object,
+      callback: (error: Error | null) => void) => callback(failure ? new Error('unsupported profile') : null))
+    await expect(integratedDecodeDevice([{ path: '/input.mp4' }, { path: '/input.mp4' }]))
+      .resolves.toBe(failure ? undefined : '/dev/dri/renderD128')
+    expect(childMocks.execFile).toHaveBeenCalledTimes(1)
+    const args = childMocks.execFile.mock.calls[0]?.[1] as string[]
+    expect(args).toEqual(expect.arrayContaining(['-hwaccel', 'vaapi', '-hwaccel_device', '/dev/dri/renderD128']))
+    expect(args).not.toContain('auto')
+  })
+
+  it('never probes AMD or NVIDIA render nodes for hardware encoding', async () => {
+    vi.stubEnv('otc_CPU_ONLY', '0')
+    fsMocks.readdir.mockResolvedValue([
+      { name: 'renderD130', isCharacterDevice: () => true },
+      { name: 'renderD131', isCharacterDevice: () => true }
+    ])
+    fsMocks.readFile.mockImplementation((path: string) => Promise.resolve(path.endsWith('/vendor')
+      ? path.includes('renderD130') ? '0x1002' : '0x10de' : 'PCI_SLOT_NAME=0000:0a:00.0'))
+    fsMocks.access.mockResolvedValue(undefined)
+    const encoders = await exportEncoders()
+    expect(encoders).toHaveLength(1)
+    expect(encoders[0]).toMatchObject({ hardwareLabel: 'CPU', output: softwareEncoder().output })
+    expect(childMocks.execFile).not.toHaveBeenCalled()
   })
 
   it('falls back to CPU decoding when the integrated GPU is inaccessible', async () => {

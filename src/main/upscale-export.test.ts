@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { execFileSync } from 'node:child_process'
 import { join } from 'node:path'
 import { upscalePlan } from '../upscale'
-import { FaceAuthorizationError, type FaceCommand } from './face-process'
+import { FaceAuthorizationError, type FaceCommand, type FacePipelineOptions } from './face-process'
 import { mocks, upscalePack, hardwareEncoder, cpuEncoder, filter, request, runExport } from './upscale-export-fixture'
 import { upscaleExportCanvas, encodeWithUpscale } from './upscale-export'
 
@@ -294,7 +294,7 @@ describe('Upscale export fallback and cleanup behavior', () => {
     expect(second[1]?.args).not.toContain('CPU')
     expect(second.every((command) => !command.elevated)).toBe(true)
     expect(mocks.jobsRun).toHaveBeenCalledOnce()
-    expect(mocks.rm).toHaveBeenCalledTimes(4) // Before each attempt, audio, and final video cleanup.
+    expect(mocks.rm).toHaveBeenCalledTimes(7) // Video and cancellation marker before each attempt, audio, and final video cleanup.
   })
 
   it('retries the final AUTO pipeline exactly once on CPU', async () => {
@@ -312,7 +312,7 @@ describe('Upscale export fallback and cleanup behavior', () => {
     expect(second[1]?.args).toContain('CPU')
     expect(second[2]?.executable).toBe(first[2]?.executable)
     expect(mocks.jobsRun).toHaveBeenCalledOnce()
-    expect(mocks.rm).toHaveBeenCalledTimes(4)
+    expect(mocks.rm).toHaveBeenCalledTimes(7)
   })
 
   it('preserves a failed final CPU retry and cleans up without another attempt', async () => {
@@ -323,7 +323,7 @@ describe('Upscale export fallback and cleanup behavior', () => {
 
     expect(mocks.runFacePipeline).toHaveBeenCalledTimes(2)
     expect(mocks.jobsRun).not.toHaveBeenCalled()
-    expect(mocks.rm).toHaveBeenCalledTimes(4)
+    expect(mocks.rm).toHaveBeenCalledTimes(7)
   })
 
   it('does not redundantly retry an explicitly CPU-only failure', async () => {
@@ -339,7 +339,7 @@ describe('Upscale export fallback and cleanup behavior', () => {
     expect(mocks.exportEncoders).not.toHaveBeenCalled()
     expect(mocks.restrictedIntelRenderNode).not.toHaveBeenCalled()
     expect(mocks.jobsRun).not.toHaveBeenCalled()
-    expect(mocks.rm).toHaveBeenCalledTimes(3)
+    expect(mocks.rm).toHaveBeenCalledTimes(5)
   })
 
   it('does not retry a cancelled GPU attempt', async () => {
@@ -349,7 +349,7 @@ describe('Upscale export fallback and cleanup behavior', () => {
 
     expect(mocks.runFacePipeline).toHaveBeenCalledOnce()
     expect(mocks.jobsRun).not.toHaveBeenCalled()
-    expect(mocks.rm).toHaveBeenCalledTimes(3)
+    expect(mocks.rm).toHaveBeenCalledTimes(5)
   })
 
   it('never retries spatial Flash inference on an unqualified CPU backend', async () => {
@@ -415,6 +415,18 @@ describe('Upscale export fallback and cleanup behavior', () => {
     expect(mocks.rm).toHaveBeenCalledWith('/tmp/upscale-work/upscale-video.mp4', { force: true })
   })
 
+  it('notifies the worker through a private marker and clears it before retries', async () => {
+    mocks.runFacePipeline.mockImplementationOnce(async (_commands: unknown, _id: unknown, _duration: unknown, options: FacePipelineOptions) => {
+      await options.onCancel?.()
+      throw new Error('Job cancelled')
+    })
+    await expect(runExport()).rejects.toThrow('Job cancelled')
+    expect(mocks.writeFile).toHaveBeenCalledWith('/tmp/upscale-work/upscale.cancel', '', { flag: 'wx', mode: 0o600 })
+    expect(mocks.rm).toHaveBeenCalledWith('/tmp/upscale-work/upscale.cancel', { force: true })
+    const firstRemove = mocks.rm.mock.invocationCallOrder[0]
+    expect(firstRemove).toBeLessThan(mocks.runFacePipeline.mock.invocationCallOrder[0] ?? 0)
+  })
+
   it('cleans generated scratch files after cancellation', async () => {
     mocks.runFacePipeline.mockRejectedValue(new Error('Job cancelled'))
 
@@ -426,7 +438,8 @@ describe('Upscale export fallback and cleanup behavior', () => {
 
   it('preserves the pipeline error when scratch cleanup fails', async () => {
     mocks.runFacePipeline.mockRejectedValue(new Error('pipeline failed'))
-    mocks.rm.mockRejectedValue(new Error('scratch cleanup failed'))
+    mocks.rm.mockImplementation((path: string) => path.endsWith('/upscale.cancel')
+      ? Promise.resolve() : Promise.reject(new Error('scratch cleanup failed')))
 
     await expect(runExport()).rejects.toThrow('pipeline failed')
   })

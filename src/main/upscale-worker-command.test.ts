@@ -21,6 +21,7 @@ describe('Upscale worker command', () => {
     expect(command.args).toEqual(expect.arrayContaining([
       '--models', '/models/flashvsr-plus', '--rife', '/models/rife.xml',
       '--mode', 'turbo', '--scratch', '/tmp/upscale-work',
+      '--cancel-file', '/tmp/upscale-work/upscale.cancel',
       '--width', '1920', '--height', '1080', '--fps', '24',
       '--output-width', '3840', '--output-height', '2160', '--output-fps', '60',
       '--duration', '3', '--device', 'AUTO'

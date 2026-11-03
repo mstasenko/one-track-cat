@@ -45,6 +45,7 @@ export function upscaleWorkerCommand(
   const args = [
     ...(pack.models ? ['--models', pack.models] : []), '--rife', pack.rife,
     ...(mode ? ['--mode', mode, ...(scratch ? ['--scratch', scratch] : [])] : []),
+    ...(scratch ? ['--cancel-file', join(scratch, 'upscale.cancel')] : []),
     ...(spatialRanges ?? []).flatMap(([start, end]) => {
       const first = upscaleSourceFrame(Math.min(start, duration), input.fps)
       const stop = upscaleSourceFrame(Math.min(end, duration), input.fps)
@@ -91,6 +92,7 @@ export async function encodeWithUpscale(
   // The existing private job directory is on the destination disk. Keeping
   // this intermediate there also prevents separate jobs sharing a filename.
   const video = join(directory, 'upscale-video.mp4')
+  const cancelFile = join(directory, 'upscale.cancel')
   // Audio/container duration can outlast the video track by several frames.
   // Match the worker's ceiling, holding the last frame only as far as the
   // explicit decoder frame limit; padding never extends the selected duration.
@@ -121,8 +123,10 @@ export async function encodeWithUpscale(
     }
     const run = async (commands: FacePipelineCommands, message = ''): Promise<void> => {
       await removeScratchFile(video)
+      await rm(cancelFile, { force: true })
       await runFacePipeline(commands, jobId, duration, {
         label: 'Upscaling video', phase: 'upscaling', message,
+        onCancel: () => writeFile(cancelFile, '', { flag: 'wx', mode: 0o600 }),
         authorizationMessage: 'GPU authorization unavailable; trying available hardware…',
         ...(cache ? { onWorkerStderr: cache.onWorkerStderr } : {})
       })
@@ -197,6 +201,6 @@ export async function encodeWithUpscale(
     }
   } finally {
     if (cache) await cache.cleanup().catch(() => undefined)
-    await Promise.all([video, audio, ...(facePack ? [effects] : [])].map(removeScratchFile))
+    await Promise.all([video, audio, cancelFile, ...(facePack ? [effects] : [])].map(removeScratchFile))
   }
 }

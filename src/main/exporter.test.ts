@@ -9,7 +9,7 @@ vi.mock('node:fs/promises', async (importOriginal) => {
   return { ...replacement, default: replacement }
 })
 
-import { ensureFaceExportDiskSpace, estimatedExportBytes } from './exporter'
+import { ensureFaceExportDiskSpace, estimatedExportBytes, estimatedFlashScratchBytes } from './export-space'
 
 const request = {
   outputPath: '/output/export.mp4',
@@ -74,5 +74,42 @@ describe('face export disk-space guard', () => {
       .mockResolvedValueOnce({ dev: 7 })
 
     await expect(ensureFaceExportDiskSpace(request, '/temporary/face')).resolves.toBeUndefined()
+  })
+})
+
+describe('Upscale scratch-space guard', () => {
+  const spatial: ExportRequest = {
+    ...request,
+    canvas: { width: 1280, height: 720, fps: 30, fit: 'contain' },
+    sources: [],
+    upscale: { mode: 'turbo' }
+  }
+
+  beforeEach(() => vi.clearAllMocks())
+
+  it('reserves every Turbo/Base history layer plus the native free-space floor', () => {
+    expect(estimatedFlashScratchBytes(spatial)).toBe(33_223_081_984)
+    expect(estimatedFlashScratchBytes({ ...spatial, upscale: { mode: 'base' } })).toBe(53_277_097_984)
+  })
+
+  it('does not reserve Flash history for RIFE-only or single-call ranges', () => {
+    expect(estimatedFlashScratchBytes({ ...spatial, canvas: { ...spatial.canvas, width: 3840, height: 2160 } })).toBe(0)
+    const single = { ...spatial, segments: [{ id: 'short', sourceId: 'source', sourceStart: 0, sourceEnd: 13 / 30 }] }
+    expect(estimatedFlashScratchBytes(single)).toBe(0)
+    expect(estimatedFlashScratchBytes({ ...single, segments: [{ id: 'short', sourceId: 'source', sourceStart: 0, sourceEnd: 14 / 30 }] })).toBeGreaterThan(0)
+  })
+
+  it('reports low scratch space before starting workers', async () => {
+    fsPromiseMock.statfs.mockResolvedValue({ bavail: 11 * 1024 ** 3, bsize: 1 })
+    fsPromiseMock.stat.mockResolvedValue({ dev: 7 })
+    await expect(ensureFaceExportDiskSpace(spatial, '/output/.otc-export-test'))
+      .rejects.toThrow(/Not enough free disk space for Upscale.*11.0 GB available.*another drive/)
+  })
+
+  it('accepts space for history, intermediate and final output', async () => {
+    const required = estimatedExportBytes(spatial) * 2 + estimatedFlashScratchBytes(spatial)
+    fsPromiseMock.statfs.mockResolvedValue({ bavail: required, bsize: 1 })
+    fsPromiseMock.stat.mockResolvedValue({ dev: 7 })
+    await expect(ensureFaceExportDiskSpace(spatial, '/output/.otc-export-test')).resolves.toBeUndefined()
   })
 })

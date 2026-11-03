@@ -72,7 +72,7 @@ export function ExportProgress({ exporting, job, title, onCancel }: {
         <p>{cancelling ? 'Cancelling… waiting for processing to stop safely.' : progressMessage(activeJob)}</p>
         <div className="export-status" aria-live="polite">
           <span data-testid="export-phase">Phase: {cancelling ? 'Stopping' : progressPhase(activeJob)}</span>
-          <span data-testid="export-eta">{cancelling ? 'Waiting for the current batch to finish…' : `Stage ETA: ${formatEta(activeJob)}`}</span>
+          <span data-testid="export-eta">{cancelling ? 'Releasing processing resources…' : `Stage ETA: ${formatEta(activeJob)}`}</span>
         </div>
         <button autoFocus disabled={!activeJob || cancelling} onClick={() => {
           if (!activeJob) return

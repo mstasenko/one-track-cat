@@ -121,6 +121,17 @@ describe('bounded face process pipeline', () => {
     expect(message).not.toContain('otc-upscale: flash-device=')
   })
 
+  it('preserves the upstream AI cause when the encoder fails first on EOF', async () => {
+    const cause = 'otc-upscale: error=insufficient scratch space for Flash history'
+    const error = await runFacePipeline([
+      node("process.stdout.write('frame')"),
+      node(`process.stdin.resume(); process.stderr.write(${JSON.stringify(cause + '\n')}); process.stdout.end(); setTimeout(() => process.exit(1), 150)`),
+      node("process.stdin.resume(); process.stdin.on('end', () => { process.stderr.write('hardware frames reference required'); process.exit(1) })")
+    ], 'ai-scratch-encoder-eof', 1, { phase: 'upscaling' }).catch((failure: unknown) => failure)
+    expect(error).toBeInstanceOf(Error)
+    expect((error as Error).message).toBe(cause)
+  })
+
   it('filters an AI status line split across stderr chunks without losing its error', async () => {
     const actualError = 'source ended before Flash window filled'
     const chunks = [
@@ -143,6 +154,27 @@ describe('bounded face process pipeline', () => {
     expect(message).toContain(actualError)
     expect(message).not.toContain('otc-upscale: progress=')
     expect(message).not.toContain('otc-upscale: flash-device=')
+  })
+
+  it('waits for cooperative cancellation notification before settling', async () => {
+    let finishNotification = (): void => { throw new Error('Notification not initialized') }
+    const ready = new Promise<void>((resolve) => { finishNotification = resolve })
+    let notified = false
+    const task = runFacePipeline([
+      node('setInterval(() => process.stdout.write("frame"), 10)'),
+      relay, consume
+    ], 'cancel-notification', 1, { onCancel: async () => {
+      await ready
+      notified = true
+    } })
+    expect(cancelFaceExport('cancel-notification')).toBe(true)
+    let settled = false
+    const result = task.catch((error: unknown) => { settled = true; return error })
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    expect(settled).toBe(false)
+    finishNotification()
+    expect(await result).toEqual(new Error('Job cancelled'))
+    expect(notified).toBe(true)
   })
 
   it('streams complete frames through the worker and waits for all children', async () => {

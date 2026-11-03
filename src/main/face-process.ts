@@ -28,6 +28,8 @@ export interface FacePipelineOptions {
   encodingHardwareLabel?: HardwareLabel
   phase?: JobPhase
   onWorkerStderr?: (stream: Readable) => Promise<void>
+  /** Notify a buffered native worker without signalling its elevated process. */
+  onCancel?: () => Promise<void>
   preparationStart?: number
   preparationEnd?: number
 }
@@ -64,9 +66,7 @@ function workerHardwareLabel(line: string): HardwareLabel | undefined {
 }
 
 function faceAnalysisMessage(hardware: HardwareLabel | undefined): string {
-  return hardware
-    ? `Detecting faces using ${hardware}`
-    : 'Detecting faces'
+  return hardware ? `Detecting faces using ${hardware}` : 'Detecting faces'
 }
 
 function report(progress: JobProgress): void {
@@ -156,12 +156,14 @@ export async function runFacePipeline(
   const pipeline = new Promise<void>((resolve, reject) => {
     const children: (FaceProcess | undefined)[] = []
     let failure: Error | undefined
+    let workerError: Error | undefined
     let remaining = 0
     let timer: ReturnType<typeof setTimeout> | undefined
     let stopping = false
     let settled = false
     let cancelled = false
     let stderrCapture: Promise<void> | undefined
+    let cancelNotification: Promise<void> | undefined
     let finishStarted = false
     const statusCarry: string[] = []
     const discardStatusLine: boolean[] = []
@@ -192,9 +194,7 @@ export async function runFacePipeline(
       // An explicit undefined label clears a stale inference label when a later
       // frame is served by the cache. Omitting the property preserves it across
       // ordinary progress updates.
-      if (Object.prototype.hasOwnProperty.call(progress, 'hardwareLabel')) {
-        hardwareLabel = progress.hardwareLabel
-      }
+      if (Object.prototype.hasOwnProperty.call(progress, 'hardwareLabel')) hardwareLabel = progress.hardwareLabel
       const nextPhase = progress.phase ?? phase
       if (nextPhase !== phase) {
         phase = nextPhase
@@ -210,9 +210,7 @@ export async function runFacePipeline(
       const emitted: JobProgress = { ...progress, phase }
       if (hardwareLabel === undefined) delete emitted.hardwareLabel
       else emitted.hardwareLabel = hardwareLabel
-      if (Object.prototype.hasOwnProperty.call(progress, 'encodingHardwareLabel')) {
-        encodingHardwareLabel = progress.encodingHardwareLabel
-      }
+      if (Object.prototype.hasOwnProperty.call(progress, 'encodingHardwareLabel')) encodingHardwareLabel = progress.encodingHardwareLabel
       if (encodingHardwareLabel === undefined) delete emitted.encodingHardwareLabel
       else emitted.encodingHardwareLabel = encodingHardwareLabel
       if (etaSeconds === undefined) delete emitted.etaSeconds
@@ -268,6 +266,9 @@ export async function runFacePipeline(
       discardPreparationLine = false
     }
     const reportWorkerLine = (line: string): void => {
+      // An encoder may fail first on EOF after an upstream AI failure.
+      // Keep the worker's explicit cause instead of that downstream symptom.
+      if (/^otc-(?:upscale|face-blur): error=/.test(line)) workerError ??= new Error(line)
       const upscaleProgress = upscaling ? upscaleProgressMarker.exec(line) : null
       if (upscaleProgress) {
         // Model work can advance before the first encoded frame. Never move
@@ -331,12 +332,13 @@ export async function runFacePipeline(
       if (remaining > 0 || settled || finishStarted) return
       finishStarted = true
       upscaleInputBuffer = cleanupFaceInputBuffer(upscaleInputBuffer, children[0]?.stdout)
-      void (stderrCapture ?? Promise.resolve()).then(() => {
+      void Promise.all([stderrCapture, cancelNotification]).then(() => {
         if (settled) return
         settled = true
         if (timer) clearTimeout(timer)
         active.delete(id)
         if (failure) {
+          if (workerError && !cancelled && !(failure instanceof FaceAuthorizationError)) failure = workerError
           const authorizationMessage = !cancelled && failure instanceof FaceAuthorizationError ? options.authorizationMessage : undefined
           const authorizationPendingRetry = authorizationMessage !== undefined
           emit({
@@ -391,6 +393,7 @@ export async function runFacePipeline(
     active.set(id, () => {
       if (settled) return
       cancelled = true
+      cancelNotification ??= Promise.resolve().then(() => options.onCancel?.()).catch(() => undefined)
       failure = new Error('Job cancelled')
       stop()
     })

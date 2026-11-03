@@ -105,19 +105,29 @@ async function renderDevices(): Promise<RenderDevice[]> {
           .catch(() => '')
         return { path, vendor, pciSlot }
       }))
-    return rankRenderDevices(devices)
+    return rankRenderDevices(devices.filter((device) => device.vendor.trim().toLowerCase() === '0x8086'))
   } catch {
     return []
   }
 }
 
 /** Returns an accessible Intel iGPU for decode while leaving a dGPU to inference/encoding. */
-export async function integratedDecodeDevice(): Promise<string | undefined> {
+export async function integratedDecodeDevice(sources: readonly { path: string }[] = []): Promise<string | undefined> {
   if (process.env.otc_CPU_ONLY === '1') return undefined
   const device = (await renderDevices()).find((candidate) => renderDeviceHardwareLabel(candidate) === 'iGPU')
   if (!device) return undefined
   try {
     await access(device.path, constants.R_OK | constants.W_OK)
+    // Pin VAAPI rather than FFmpeg's auto selection, which can initialize CUDA
+    // even with an Intel render-node argument. Unsupported inputs retain CPU
+    // decoding instead of making an otherwise valid export fail.
+    for (const path of new Set(sources.map((source) => source.path))) {
+      await execFileAsync(ffmpegPath(), [
+        '-hide_banner', '-loglevel', 'error', '-hwaccel', 'vaapi',
+        '-hwaccel_device', device.path, '-i', path,
+        '-frames:v', '1', '-an', '-sn', '-f', 'null', '-'
+      ], { timeout: 5_000 })
+    }
     return device.path
   } catch {
     return undefined

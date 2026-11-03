@@ -3,13 +3,8 @@ import type { ExportRequest } from '../types'
 import type { UpscaleExportContext } from './upscale-export'
 
 const fsMocks = vi.hoisted(() => ({
-  mkdir: vi.fn(),
-  mkdtemp: vi.fn(),
-  rename: vi.fn(),
-  rm: vi.fn(),
-  stat: vi.fn(),
-  statfs: vi.fn(),
-  writeFile: vi.fn()
+  mkdir: vi.fn(), mkdtemp: vi.fn(), rename: vi.fn(), rm: vi.fn(),
+  stat: vi.fn(), statfs: vi.fn(), writeFile: vi.fn()
 }))
 const encoderMocks = vi.hoisted(() => ({
   exportEncoders: vi.fn(),
@@ -65,7 +60,7 @@ const request: ExportRequest = {
 beforeEach(() => {
   vi.clearAllMocks()
   fsMocks.mkdtemp.mockResolvedValue('/exports/.otc-export-test')
-  fsMocks.statfs.mockResolvedValue({ bavail: 1_000_000_000, bsize: 1 })
+  fsMocks.statfs.mockResolvedValue({ bavail: 100_000_000_000, bsize: 1 })
   fsMocks.stat.mockResolvedValue({ dev: 1 })
   fsMocks.rm.mockResolvedValue(undefined)
   fsMocks.mkdir.mockResolvedValue(undefined)
@@ -101,6 +96,15 @@ describe('restricted GPU export authorization', () => {
     expect(args).toEqual(expect.arrayContaining(['-filter_complex_script', saved?.[0]]))
     expect(args).not.toContain('-filter_complex')
     expect(fsMocks.rm).toHaveBeenCalledWith('/exports/.otc-export-test', { recursive: true, force: true })
+  })
+
+  it('pins decoding to Intel VAAPI instead of probing CUDA', async () => {
+    encoderMocks.integratedDecodeDevice.mockResolvedValue('/dev/dri/renderD128')
+    await exportVideo({ ...request, upscale: { mode: 'turbo' } })
+    const input = upscaleMocks.encodeWithUpscale.mock.calls[0]?.[1] as string[]
+    expect(input).toEqual(expect.arrayContaining(['-hwaccel', 'vaapi', '-hwaccel_device', '/dev/dri/renderD128']))
+    expect(input).not.toContain('auto')
+    expect(encoderMocks.integratedDecodeDevice).toHaveBeenCalledWith([request.sources[0]?.metadata])
   })
 
   it('loads spatial models for native 4K close-ups and passes only their ranges', async () => {
@@ -344,6 +348,15 @@ describe('restricted GPU export authorization', () => {
 
     await expect(exportVideo(request)).rejects.toThrow('Not enough free disk space')
     expect(fsMocks.mkdtemp).not.toHaveBeenCalled()
+  })
+
+  it('rejects insufficient Flash scratch before launching any processing', async () => {
+    fsMocks.statfs.mockResolvedValue({ bavail: 11 * 1024 ** 3, bsize: 1 })
+    await expect(exportVideo({ ...request, upscale: { mode: 'turbo' } }))
+      .rejects.toThrow('Not enough free disk space for Upscale')
+    expect(upscaleMocks.encodeWithUpscale).not.toHaveBeenCalled()
+    expect(jobMocks.run).not.toHaveBeenCalled()
+    expect(fsMocks.rm).toHaveBeenCalledWith('/exports/.otc-export-test', { recursive: true, force: true })
   })
 
   it('uses the face encoder branch when no cached preview is available', async () => {

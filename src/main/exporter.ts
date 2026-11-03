@@ -365,8 +365,8 @@ async function prepareInputs(request: ExportRequest, directory: string, range?: 
 }> {
   const inputArgs = ['-hide_banner', '-y']
   const { request: seekRequest, seek } = await preparePreviewSeek(request, range)
-  const decodeDevice = await integratedDecodeDevice()
-  const decoderInputArgs = decodeDevice ? ['-hwaccel', 'auto', '-hwaccel_device', decodeDevice] : []
+  const decodeDevice = await integratedDecodeDevice(seekRequest.sources.map((source) => source.metadata))
+  const decoderInputArgs = decodeDevice ? ['-hwaccel', 'vaapi', '-hwaccel_device', decodeDevice] : []
   const graphRequest = prepareTimelineInputs(seekRequest, inputArgs, seek, decoderInputArgs)
   const preparedInputs: PreparedInput[] = []
   for (const [offset, overlay] of seekRequest.overlays.entries()) {
